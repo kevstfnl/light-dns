@@ -61,6 +61,8 @@ async fn rejects_unsupported_and_invalid_queries() -> TestResult {
 async fn local_names_and_zones_never_reach_upstreams() -> TestResult {
     let upstream = UdpSocket::bind("127.0.0.1:0").await?;
     let config = Config {
+        cache: light_dns::config::CacheConfig::disabled(),
+        filtering: light_dns::config::FilteringConfig::disabled(),
         dns: DnsConfig {
             listen: "127.0.0.1:0".parse()?,
             upstreams: vec![upstream.local_addr()?],
@@ -113,6 +115,8 @@ async fn handles_concurrent_clients_without_mixing_ids() -> TestResult {
 async fn saturation_does_not_start_more_upstream_requests() -> TestResult {
     let silent = UdpSocket::bind("127.0.0.1:0").await?;
     let (mut server, address) = bind(Config {
+        cache: light_dns::config::CacheConfig::disabled(),
+        filtering: light_dns::config::FilteringConfig::disabled(),
         dns: DnsConfig {
             listen: "127.0.0.1:0".parse()?,
             upstreams: vec![silent.local_addr()?],

@@ -20,15 +20,15 @@
 - [x] Prendre en charge les enregistrements A et AAAA.
 
 ## 4. Filtrage DNS
-- [ ] Charger les blocklists depuis des fichiers locaux.
-- [ ] Bloquer les domaines présents dans les listes.
-- [ ] Ajouter une allowlist pour les exceptions.
-- [ ] Permettre le téléchargement et la mise à jour des listes.
+- [x] Charger les blocklists depuis des fichiers locaux.
+- [x] Bloquer les domaines présents dans les listes.
+- [x] Ajouter une allowlist pour les exceptions.
+- [x] Permettre le téléchargement et la mise à jour des listes.
 
 ## 5. Cache et performances
-- [ ] Ajouter un cache DNS avec respect des TTL.
-- [ ] Limiter l'utilisation de la mémoire.
-- [ ] Réaliser des benchmarks de latence et de consommation.
+- [x] Ajouter un cache DNS avec respect des TTL.
+- [x] Limiter l'utilisation de la mémoire (entrées et budget pondéré estimé).
+- [x] Réaliser des benchmarks locaux de latence, CPU et RSS reproductibles.
 
 ## 6. Configuration
 - [ ] Ajouter le hot reload du fichier TOML.
@@ -47,5 +47,6 @@
 - [ ] Publier une première version `v0.1.0`.
 
 ## Plus tard
+- [ ] Filtrer les cibles CNAME liées à la question DNS, en respectant l'allowlist.
 - [ ] Exposer des métriques Prometheus (`/metrics`).
 - [ ] Ajouter le support DNS-over-HTTPS / DNS-over-TLS.

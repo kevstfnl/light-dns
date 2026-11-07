@@ -37,6 +37,7 @@ async fn bind_rules(
     }
     let mut config = Config::from_toml(&content)?;
     config.dns.listen.set_port(0);
+    config.filtering = light_dns::config::FilteringConfig::disabled();
     Ok(bind(config).await?)
 }
 

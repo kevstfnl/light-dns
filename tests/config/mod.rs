@@ -2,6 +2,8 @@ use hickory_proto::rr::Name;
 use light_dns::config::{Config, ConfigError};
 use std::net::{IpAddr, SocketAddr};
 
+mod cache;
+mod filtering;
 mod validation;
 
 fn document(listen: &str, upstreams: &[&str], rewrites: &[(&str, &str)]) -> String {

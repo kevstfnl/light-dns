@@ -1,7 +1,13 @@
+mod cache;
 mod error;
+mod filtering;
 mod validation;
 
+pub use cache::CacheConfig;
+use cache::RawCacheConfig;
 pub use error::ConfigError;
+use filtering::RawFilteringConfig;
+pub use filtering::{FilterSource, FilteringConfig};
 
 use self::{
     error::invalid,
@@ -20,6 +26,8 @@ use std::{
 pub struct Config {
     pub dns: DnsConfig,
     pub rewrites: HashMap<Name, IpAddr>,
+    pub filtering: FilteringConfig,
+    pub cache: CacheConfig,
 }
 
 #[derive(Debug)]
@@ -34,6 +42,10 @@ pub struct DnsConfig {
 struct RawConfig {
     dns: RawDnsConfig,
     rewrites: HashMap<String, String>,
+    #[serde(default)]
+    filtering: RawFilteringConfig,
+    #[serde(default)]
+    cache: RawCacheConfig,
 }
 
 #[derive(Deserialize)]
@@ -94,6 +106,8 @@ impl Config {
                 upstream_timeout: Duration::from_millis(raw.dns.upstream_timeout_ms),
             },
             rewrites,
+            filtering: raw.filtering.validate()?,
+            cache: raw.cache.validate()?,
         })
     }
 }

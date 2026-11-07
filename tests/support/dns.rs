@@ -11,6 +11,10 @@ use light_dns::{
 use std::{
     collections::HashMap,
     net::{Ipv4Addr, SocketAddr},
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    },
     time::Duration,
 };
 use tokio::{
@@ -45,6 +49,7 @@ pub(crate) fn answer(request: &Message) -> Message {
 
 pub(crate) struct Upstream {
     pub(crate) address: SocketAddr,
+    pub(crate) hits: Arc<AtomicUsize>,
     udp: JoinHandle<()>,
     tcp: JoinHandle<()>,
 }
@@ -72,10 +77,14 @@ impl Upstream {
         let udp = UdpSocket::bind(listen).await?;
         let address = udp.local_addr()?;
         let tcp = TcpListener::bind(address).await?;
+        let hits = Arc::new(AtomicUsize::new(0));
+        let udp_hits = hits.clone();
+        let tcp_hits = hits.clone();
         let udp = tokio::spawn(async move {
             let mut bytes = vec![0; 65535];
             while let Ok((length, peer)) = udp.recv_from(&mut bytes).await {
                 let request = Message::from_vec(&bytes[..length]).unwrap();
+                udp_hits.fetch_add(1, Ordering::SeqCst);
                 let response = udp_response(&request);
                 let mut bytes = Vec::new();
                 let mut encoder = BinEncoder::new(&mut bytes);
@@ -87,17 +96,29 @@ impl Upstream {
         let tcp = tokio::spawn(async move {
             while let Ok((mut stream, _)) = tcp.accept().await {
                 let request = read_tcp(&mut stream).await.unwrap();
+                tcp_hits.fetch_add(1, Ordering::SeqCst);
                 write_tcp(&mut stream, &tcp_response(&request))
                     .await
                     .unwrap();
             }
         });
-        Ok(Self { address, udp, tcp })
+        Ok(Self {
+            address,
+            hits,
+            udp,
+            tcp,
+        })
     }
 }
 
 pub(crate) async fn start(upstreams: Vec<SocketAddr>) -> TestResult<(DnsServer, SocketAddr)> {
-    Ok(bind(Config {
+    Ok(bind(test_config(upstreams)?).await?)
+}
+
+pub(crate) fn test_config(upstreams: Vec<SocketAddr>) -> TestResult<Config> {
+    Ok(Config {
+        cache: light_dns::config::CacheConfig::disabled(),
+        filtering: light_dns::config::FilteringConfig::disabled(),
         dns: DnsConfig {
             listen: "127.0.0.1:0".parse()?,
             upstreams,
@@ -105,7 +126,6 @@ pub(crate) async fn start(upstreams: Vec<SocketAddr>) -> TestResult<(DnsServer, 
         },
         rewrites: HashMap::new(),
     })
-    .await?)
 }
 
 pub(crate) async fn udp(address: SocketAddr, request: &Message) -> TestResult<(Message, usize)> {

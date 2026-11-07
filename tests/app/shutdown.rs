@@ -29,7 +29,7 @@ fn serves_dns_and_stops_on_sigterm() -> Result<(), Box<dyn std::error::Error>> {
     fs::write(
         directory.0.join("config.toml"),
         format!(
-            "[dns]\nlisten = '{address}'\nupstreams = ['127.0.0.1:9']\n[rewrites]\n'*.lan' = '192.168.1.1'\n"
+            "[dns]\nlisten = '{address}'\nupstreams = ['127.0.0.1:9']\n[rewrites]\n'*.lan' = '192.168.1.1'\n[filtering]\nenabled = false\n"
         ),
     )?;
     drop((udp, tcp));

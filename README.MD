@@ -4,32 +4,33 @@ Un serveur DNS léger et sans interface graphique, développé en Rust pour les 
 
 Configuration simple et faible consommation de ressources. Le déploiement Docker est prévu.
 
-> **Statut :** Serveur DNS UDP/TCP avec forwarding, rewrites locaux A/AAAA et configuration TOML validée. Le filtrage et le cache restent à développer.
+> **Statut :** Serveur DNS UDP/TCP avec forwarding, rewrites locaux A/AAAA, blocklists, allowlist, cache DNS avec expiration et configuration TOML validée.
 
 ## Fonctionnalités disponibles
 
 - Écoute UDP et TCP sur la même adresse, en IPv4 ou IPv6.
 - Forwarding vers les upstreams configurés, avec timeouts, bascule et repli TCP.
 - Rewrites exacts et wildcards, avec réponses A/AAAA locales prioritaires.
+- Filtrage de domaines avec listes classiques par défaut, exceptions et mises à jour automatiques.
+- Cache des réponses upstream avec TTL décroissants, cache négatif SOA et budget mémoire configurable.
 - Configuration exclusivement TOML et erreurs de démarrage explicites.
 - Arrêt sur `SIGINT` (Ctrl+C) et `SIGTERM` sous Linux.
 
 ## Fonctionnalités prévues
 
-- **DNS Filtering** — Blocage des publicités, trackers et domaines malveillants via des blocklists.
-- **DNS Cache** — Mise en cache des réponses pour réduire la latence.
+- **Hot reload TOML** — Rechargement de la configuration sans arrêt du service.
 - **Docker** — Déploiement léger avec Docker Compose.
 
 ## Fonctionnement
 
-Le traitement prévu des requêtes DNS suit cet ordre :
+Le traitement des requêtes DNS suit cet ordre :
 
 1. Recherche d'une règle de réécriture DNS locale.
 2. Vérification des listes de blocage.
 3. Recherche d'une réponse dans le cache.
 4. Transmission aux serveurs DNS externes.
 
-Actuellement, les règles locales sont consultées en premier, sans accès réseau. Les requêtes récursives restantes sont transmises aux upstreams dans l'ordre configuré. Une erreur réseau, un timeout, une réponse invalide, `SERVFAIL` ou `REFUSED` déclenche l'essai suivant. Si tous échouent, le client reçoit `SERVFAIL`. Les réponses négatives, les enregistrements et leurs TTL upstream sont conservés ; aucune réponse n'est mise en cache.
+Les rewrites sont consultés en premier, puis les filtres, sans accès réseau. Un domaine bloqué reçoit `NXDOMAIN`, sans enregistrement, quel que soit le type demandé. Les exceptions autorisent la poursuite du traitement. Après une absence dans le cache, les requêtes récursives sont transmises aux upstreams dans l'ordre configuré. Une erreur réseau, un timeout, une réponse invalide, `SERVFAIL` ou `REFUSED` déclenche l'essai suivant. Si tous échouent, le client reçoit `SERVFAIL`. Les réponses admissibles sont conservées en mémoire, avec diminution des TTL à chaque lecture et expiration sans prolongation.
 
 Les clients TCP utilisent un upstream TCP. Pour UDP, une réponse upstream tronquée déclenche un nouvel échange TCP. Les réponses UDP respectent 512 octets sans EDNS, ou la taille annoncée par le client plafonnée à 1232 octets avec EDNS ; une réponse trop grande porte le drapeau `TC` pour permettre au client de réessayer en TCP. EDNS(0) et son indicateur DNSSEC `DO` sont pris en charge ; les autres options EDNS ne sont pas relayées. La validation DNSSEC reste du ressort de l'upstream.
 
@@ -44,9 +45,9 @@ Les règles suivent les priorités DNS de la [RFC 4592](https://www.rfc-editor.o
 
 Un wildcard déclare sa zone comme locale : son apex et tous ses descendants restent hors du forwarding, y compris en cas de réponse négative. Une règle exacte seule réserve uniquement son nom ; elle ne transforme pas sa zone parente en zone locale. Par exemple, `service.example.com` ne bloque pas `other.example.com`.
 
-Ces réponses sont des substitutions locales : les drapeaux `AA` et `AD` restent désactivés, sans SOA ni validation DNSSEC locale. Les réponses négatives locales sans SOA ne fournissent pas de TTL de cache négatif ([RFC 2308](https://www.rfc-editor.org/rfc/rfc2308.html#section-5)). Les réponses locales fonctionnent aussi sans récursion (`RD=0`). Les autres requêtes sans récursion, les classes locales autres que IN, les transferts de zone et les requêtes signées TSIG sont refusés ; les opérations autres que QUERY répondent `NOTIMP`.
+Ces réponses sont des substitutions locales : les drapeaux `AA` et `AD` restent désactivés, sans SOA ni validation DNSSEC locale. Les réponses négatives locales sans SOA ne fournissent pas de TTL de cache négatif ([RFC 2308](https://www.rfc-editor.org/rfc/rfc2308.html#section-5)). Les réponses locales et les réponses déjà en cache fonctionnent aussi sans récursion (`RD=0`) ; une absence dans le cache est alors refusée. Les classes locales autres que IN, les transferts de zone et les requêtes signées TSIG sont refusés ; les opérations autres que QUERY répondent `NOTIMP`.
 
-Le nombre de requêtes simultanées vers les upstreams est limité à 256 ; un dépassement répond `SERVFAIL`. Les réponses locales restent disponibles à cette limite. Les connexions TCP inactives sont fermées après 10 secondes. Les journaux vont sur stderr, sans journalisation de chaque requête par défaut.
+Le nombre de requêtes simultanées vers les upstreams est limité à 256 ; un dépassement répond `SERVFAIL`. Les réponses locales et les lectures du cache restent disponibles à cette limite. Les connexions TCP inactives sont fermées après 10 secondes. Les journaux vont sur stderr, sans journalisation de chaque requête par défaut.
 
 ## Configuration
 
@@ -64,6 +65,12 @@ upstream_timeout_ms = 2000
 "router.lan" = "192.168.1.1"
 "nas.lan" = "192.168.1.20"
 "nas6.lan" = "fd00::20"
+
+[cache]
+enabled = true
+max_entries = 4096
+max_memory_bytes = 8388608
+max_ttl_secs = 86400
 ```
 
 Le fichier `config.toml` est lu depuis le répertoire de travail. Les sections `[dns]` et `[rewrites]`, ainsi que `listen` et `upstreams`, sont obligatoires ; `[rewrites]` peut être vide. Les champs inconnus sont refusés.
@@ -76,6 +83,24 @@ Le fichier `config.toml` est lu depuis le répertoire de travail. Les sections `
 - **Destinations des rewrites :** une seule adresse IPv4 ou IPv6 par règle, sans port ni crochets. Un même nom ne peut pas encore publier les deux familles simultanément.
 
 La validation de configuration ne contacte pas les upstreams. Les changements de configuration nécessitent un redémarrage.
+
+## Filtrage et listes par défaut
+
+Le filtrage est actif par défaut, avec **[AdGuard DNS filter](https://github.com/AdguardTeam/HostlistsRegistry/tree/main/filters/general/filter_1_DnsFilter)** (dont EasyList/EasyPrivacy adaptées au DNS) et **[Peter Lowe’s](https://pgl.yoyo.org/adservers/)** (également utilisée par uBlock Origin).
+
+Les sources, fichiers locaux, exceptions et délais sont éditables dans `[filtering]` de `config.toml`. `enabled = false` désactive tout filtrage ; `sources = []` conserve uniquement les fichiers et exceptions locaux. Les formats domaines, hosts et règles Adblock DNS simples sont reconnus ; les règles de navigateur incompatibles sont ignorées et comptabilisées.
+
+Les fichiers et le cache disque sont préchargés. Les téléchargements et mises à jour se font en arrière-plan avec remplacement atomique de l'index. **Au premier démarrage sans cache, les listes distantes deviennent actives après leur chargement.** Une panne conserve la dernière version valide ; sans version disponible, le DNS continue avec les autres règles et un avertissement.
+
+Voir la [configuration détaillée du filtrage](docs/filtrage.md) pour les formats, priorités, limites et exemples TOML.
+
+## Cache DNS et performances
+
+Le cache est actif par défaut et se règle dans `[cache]` : 4096 entrées, budget pondéré de 8 Mio et conservation plafonnée à 24 heures. Ce budget estime le poids des entrées ; il ne borne pas strictement la RAM totale du processus. `enabled = false` désactive le cache. Les filtres sont consultés avant chaque lecture, y compris après une mise à jour des listes.
+
+Les réponses complètes peuvent être réutilisées entre UDP et TCP, avec adaptation à chaque client. Les réponses négatives exigent un SOA pertinent ; leur durée suit le minimum du TTL du SOA et de son champ MINIMUM. Les erreurs, TTL nuls et réponses contenant des signatures DNSSEC restent hors cache. Aucun historique de requêtes n'est écrit sur disque.
+
+Voir les [règles et limites du cache](docs/cache.md) et le [benchmark local reproductible](docs/performance.md), incluant latence, CPU et mémoire.
 
 ## Développement
 
@@ -120,25 +145,38 @@ src/
 │   └── shutdown.rs          # Signaux d'arrêt
 ├── config/
 │   ├── mod.rs               # Chargement TOML et types validés
+│   ├── cache.rs             # Paramètres et validation du cache DNS
 │   ├── error.rs             # Erreurs de configuration
+│   ├── filtering.rs         # Paramètres et validation du filtrage
 │   └── validation.rs        # Validation des adresses et noms DNS
-└── dns/
-    ├── mod.rs
-    ├── forwarder.rs         # Échanges avec les upstreams
-    ├── rewrites.rs          # Index des noms locaux et priorités wildcard
-    └── server/
-        ├── mod.rs           # Écoutes UDP/TCP et cycle de vie du serveur
-        ├── handler.rs       # Traitement des requêtes
-        └── response.rs      # Réponses DNS, EDNS et troncature
+├── dns/
+│   ├── mod.rs
+│   ├── cache/
+│   │   ├── mod.rs           # Stockage pondéré et vieillissement des TTL
+│   │   └── policy.rs        # Admissibilité et expiration des réponses
+│   ├── forwarder.rs         # Échanges avec les upstreams
+│   ├── rewrites.rs          # Index des noms locaux et priorités wildcard
+│   └── server/
+│       ├── mod.rs           # Écoutes UDP/TCP et cycle de vie du serveur
+│       ├── handler.rs       # Traitement des requêtes
+│       └── response.rs      # Réponses DNS, EDNS et troncature
+└── filtering/
+    ├── mod.rs               # État partagé des filtres
+    ├── parser.rs            # Formats DNS, hosts et sous-ensemble Adblock
+    ├── index.rs             # Recherche des domaines et exceptions
+    ├── download.rs          # HTTP borné et cache disque
+    └── updater.rs           # Chargement et actualisation des listes
 tests/
 ├── integration.rs           # Point d'entrée unique de la suite de tests
 ├── app/                     # Démarrage du binaire et arrêt
 ├── config/                  # Chargement et validation
-├── dns/                     # Forwarding, rewrites et server/{handler,response}
+├── dns/                     # Cache, forwarding, rewrites et server/{handler,response}
+├── filtering/               # Formats de listes, priorités, téléchargements et mises à jour
+├── performance/             # Benchmark Linux de latence, CPU et mémoire
 └── support/                 # Fixtures DNS et processus de test
 ```
 
-Tous les tests résident dans `tests/` et suivent l'arborescence fonctionnelle de `src/`. Ils utilisent la bibliothèque `light_dns` et les interfaces réseau du service ; les modules internes restent privés. Les fixtures communes sont regroupées dans `tests/support/`.
+Tous les tests fonctionnels résident dans `tests/` et suivent l'arborescence de `src/`. Ils utilisent la bibliothèque `light_dns` et les interfaces réseau du service ; les modules internes restent privés. Les fixtures communes sont regroupées dans `tests/support/`, et les mesures transversales dans `tests/performance/`.
 
 Pour exécuter uniquement les tests du serveur DNS :
 

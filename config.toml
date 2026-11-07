@@ -25,3 +25,73 @@ upstream_timeout_ms = 2000
 "router.lan" = "192.168.1.1"
 # Ce nom répond en AAAA ; une requête A reçoit une réponse vide, sans repli wildcard.
 "nas6.lan" = "fd00::20"
+
+# Cache des réponses upstream, actif même si cette section est absente.
+# Rewrites et filtres restent prioritaires sur le cache.
+[cache]
+enabled = true
+max_entries = 4096 # De 1 à 65536 ; éviction des entrées excédentaires.
+# Budget pondéré estimé, pas une limite stricte de RAM du processus.
+max_memory_bytes = 8388608 # 8 Mio ; de 65536 à 1073741824 octets.
+# Durée de conservation plafonnée, sans prolonger les TTL upstream.
+max_ttl_secs = 86400 # De 1 à 604800 secondes.
+
+# Filtrage DNS actif par défaut, même si cette section est absente.
+[filtering]
+enabled = true
+# Fichiers locaux facultatifs, relatifs au répertoire de travail.
+blocklists = [] # Exemple : ["filters/block.txt"]
+allowlist_files = [] # Exemple : ["filters/allow.txt"]
+# Exceptions explicites prioritaires, domaine et sous-domaines inclus.
+allowlist = [] # Exemple : ["safe.example.com"]
+# Cache des listes distantes : répertoire dédié, accessible en écriture.
+cache_dir = "data/filters"
+update_interval_secs = 86400 # Relecture des fichiers et mise à jour distante : 24 h.
+download_timeout_secs = 15
+max_list_bytes = 8388608 # 8 Mio par liste ; maximum configurable : 16 Mio.
+
+# Sources classiques adaptées au DNS. Remplacer ce tableau pour choisir ses listes.
+# sources = [] désactive les téléchargements ; enabled = false désactive tout filtrage.
+[[filtering.sources]]
+name = "adguard-dns"
+url = "https://adguardteam.github.io/HostlistsRegistry/assets/filter_1.txt"
+
+[[filtering.sources]]
+name = "peter-lowe"
+url = "https://pgl.yoyo.org/adservers/serverlist.php?hostformat=hosts&showintro=0&mimetype=plaintext"
+
+# Alternatives facultatives : tous les blocs ci-dessous sont désactivés.
+# Pour en choisir une, décommenter ses trois lignes [[...]], name et url.
+# HaGeZi et OISD sont des agrégateurs : préférer un seul profil principal
+# plutôt que de cumuler toutes les listes. Les deux sources actives ci-dessus
+# peuvent alors être commentées. Respecter les limites de taille et de nombre de règles.
+
+# HaGeZi Light : profil léger, risque de perturbations minimal selon son éditeur.
+# [[filtering.sources]]
+# name = "hagezi-light"
+# url = "https://cdn.jsdelivr.net/gh/hagezi/dns-blocklists@latest/adblock/light.txt"
+
+# HaGeZi Normal : couverture plus large. Choisir Light OU Normal.
+# [[filtering.sources]]
+# name = "hagezi-normal"
+# url = "https://cdn.jsdelivr.net/gh/hagezi/dns-blocklists@latest/adblock/multi.txt"
+
+# OISD Small : principalement publicités, format Adblock DNS.
+# [[filtering.sources]]
+# name = "oisd-small"
+# url = "https://small.oisd.nl/"
+
+# OISD Big : publicités, suivi et domaines malveillants. Choisir Small OU Big.
+# [[filtering.sources]]
+# name = "oisd-big"
+# url = "https://big.oisd.nl/"
+
+# StevenBlack Unified : liste hosts de base, sans catégories supplémentaires.
+# [[filtering.sources]]
+# name = "stevenblack"
+# url = "https://raw.githubusercontent.com/StevenBlack/hosts/master/hosts"
+
+# AdAway : liste hosts classique, notamment utilisée sur Android.
+# [[filtering.sources]]
+# name = "adaway"
+# url = "https://raw.githubusercontent.com/AdAway/adaway.github.io/master/hosts.txt"

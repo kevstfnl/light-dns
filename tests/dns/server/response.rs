@@ -81,3 +81,49 @@ async fn forwards_aaaa_cname_additionals_and_dnssec_flags() -> TestResult {
     server.shutdown_gracefully().await?;
     Ok(())
 }
+
+#[tokio::test]
+async fn client_subnet_is_not_forwarded_over_udp_or_tcp() -> TestResult {
+    use hickory_proto::rr::rdata::opt::{ClientSubnet, EdnsCode, EdnsOption};
+
+    fn private_answer(request: &Message) -> Message {
+        let edns = request.edns.as_ref().unwrap();
+        assert!(edns.option(EdnsCode::Subnet).is_none());
+        assert!(edns.flags().dnssec_ok);
+        answer(request)
+    }
+
+    let upstream = Upstream::start(private_answer, private_answer).await?;
+    let (mut server, address) = start(vec![upstream.address]).await?;
+    let mut request = query("private.test.")?;
+    let mut edns = Edns::new();
+    edns.set_dnssec_ok(true);
+    edns.options_mut()
+        .insert(EdnsOption::Subnet(ClientSubnet::new(
+            "192.0.2.0".parse()?,
+            24,
+            0,
+        )));
+    request.edns = Some(edns);
+    // Valider la fixture évite un faux succès si l'option n'était pas encodée.
+    assert!(
+        Message::from_vec(&request.to_vec()?)?
+            .edns
+            .as_ref()
+            .unwrap()
+            .option(EdnsCode::Subnet)
+            .is_some()
+    );
+    let udp_response = udp(address, &request).await?.0;
+    let mut stream = TcpStream::connect(address).await?;
+    write_tcp(&mut stream, &request).await?;
+    let tcp_response = timeout(Duration::from_secs(3), read_tcp(&mut stream)).await??;
+    for response in [udp_response, tcp_response] {
+        assert_eq!(response.answers, answer(&request).answers);
+        let edns = response.edns.as_ref().unwrap();
+        assert!(edns.option(EdnsCode::Subnet).is_none());
+        assert!(edns.flags().dnssec_ok);
+    }
+    server.shutdown_gracefully().await?;
+    Ok(())
+}

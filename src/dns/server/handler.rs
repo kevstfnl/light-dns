@@ -1,7 +1,12 @@
 use super::response::{error_response, response_edns, send_response};
 use crate::{
     config::Config,
-    dns::{forwarder::Forwarder, rewrites::Rewrites},
+    dns::{
+        cache::{CacheKey, ResponseCache},
+        forwarder::Forwarder,
+        rewrites::Rewrites,
+    },
+    filtering::SharedFilters,
 };
 use hickory_proto::{
     op::{Message, OpCode, ResponseCode},
@@ -18,14 +23,18 @@ const MAX_IN_FLIGHT: usize = 256;
 pub(super) struct Handler {
     forwarder: Forwarder,
     rewrites: Rewrites,
+    filters: SharedFilters,
+    cache: ResponseCache,
     permits: Semaphore,
 }
 
 impl Handler {
-    pub(super) fn new(config: Config) -> Self {
+    pub(super) fn new(config: Config, filters: SharedFilters, cache: ResponseCache) -> Self {
         Self {
             forwarder: Forwarder::new(config.dns.upstreams, config.dns.upstream_timeout),
             rewrites: Rewrites::new(config.rewrites),
+            filters,
+            cache,
             permits: Semaphore::new(MAX_IN_FLIGHT),
         }
     }
@@ -54,6 +63,13 @@ impl Handler {
         {
             return response;
         }
+        if self.filters.load().is_blocked(info.query.original().name()) {
+            return error_response(request, ResponseCode::NXDomain);
+        }
+        let key = CacheKey::new(info.query.original(), request);
+        if let Some(response) = self.cache.get(&key).await {
+            return response;
+        }
         if !request.metadata.recursion_desired {
             return error_response(request, ResponseCode::Refused);
         }
@@ -67,7 +83,10 @@ impl Handler {
         message.metadata.authentic_data = request.metadata.authentic_data;
         message.edns = response_edns(request);
         match self.forwarder.forward(message, request.protocol()).await {
-            Ok(response) => response,
+            Ok(response) => {
+                self.cache.insert(key, &response).await;
+                response
+            }
             Err(error) => {
                 tracing::debug!(%error, "échec du forwarding DNS");
                 error_response(request, ResponseCode::ServFail)

@@ -8,11 +8,14 @@ use std::{
 pub(crate) struct TestDirectory(pub(crate) PathBuf);
 
 impl TestDirectory {
-    pub(crate) fn new() -> Result<Self, Box<dyn std::error::Error>> {
+    pub(crate) fn new() -> io::Result<Self> {
         let path = std::env::temp_dir().join(format!(
             "light-dns-test-{}-{}",
             std::process::id(),
-            SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map_err(io::Error::other)?
+                .as_nanos(),
         ));
         fs::create_dir(&path)?;
         Ok(Self(path))

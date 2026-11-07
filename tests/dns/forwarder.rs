@@ -176,6 +176,8 @@ async fn rejects_mismatched_or_invalid_upstream_responses() -> TestResult {
 async fn ipv6_udp_and_tcp_forwarding() -> TestResult {
     let upstream = Upstream::start_on("[::1]:0", answer, answer).await?;
     let (mut server, address) = bind(Config {
+        cache: light_dns::config::CacheConfig::disabled(),
+        filtering: light_dns::config::FilteringConfig::disabled(),
         dns: DnsConfig {
             listen: "[::1]:0".parse()?,
             upstreams: vec![upstream.address],

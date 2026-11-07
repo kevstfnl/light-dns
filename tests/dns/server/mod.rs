@@ -19,6 +19,8 @@ async fn bind_failure_and_shutdown_release_sockets() -> TestResult {
     let occupied = TcpListener::bind("127.0.0.1:0").await?;
     let address = occupied.local_addr()?;
     let config = Config {
+        cache: light_dns::config::CacheConfig::disabled(),
+        filtering: light_dns::config::FilteringConfig::disabled(),
         dns: DnsConfig {
             listen: address,
             upstreams: vec![],
