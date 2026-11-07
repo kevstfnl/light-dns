@@ -1,11 +1,14 @@
-mod config;
+#![forbid(unsafe_code)]
 
-use config::Config;
+use std::process::ExitCode;
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let config = Config::load()?;
-    println!("Listening on: {}", config.dns.listen);
-    println!("Upstreams: {:?}", config.dns.upstreams);
-    println!("Rewrites: {:?}", config.rewrites);
-    Ok(())
+#[tokio::main]
+async fn main() -> ExitCode {
+    match light_dns::app::run().await {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(error) => {
+            eprintln!("Erreur light-dns : {error}");
+            ExitCode::FAILURE
+        }
+    }
 }

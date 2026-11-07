@@ -4,20 +4,20 @@
 - [x] Initialiser le projet Rust.
 - [x] Mettre en place la configuration TOML.
 - [x] Créer le README et choisir la licence MIT.
-- [ ] Valider la configuration (IP, ports, domaines).
+- [x] Valider la configuration (IP, ports, domaines).
 
 ## 2. Serveur DNS
-- [ ] Intégrer Tokio et Hickory DNS.
-- [ ] Créer un serveur DNS UDP.
-- [ ] Ajouter le support TCP.
-- [ ] Implémenter le DNS forwarding vers les upstreams.
-- [ ] Gérer les timeouts et les erreurs DNS.
+- [x] Intégrer Tokio et Hickory DNS.
+- [x] Créer un serveur DNS UDP.
+- [x] Ajouter le support TCP.
+- [x] Implémenter le DNS forwarding vers les upstreams.
+- [x] Gérer les timeouts et les erreurs DNS.
 
 ## 3. DNS Rewrites
-- [ ] Implémenter les domaines personnalisés (`nas.lan`).
-- [ ] Ajouter le support des wildcards (`*.lan`).
-- [ ] Gérer les priorités entre les règles.
-- [ ] Prendre en charge les enregistrements A et AAAA.
+- [x] Implémenter les domaines personnalisés (`nas.lan`).
+- [x] Ajouter le support des wildcards (`*.lan`).
+- [x] Gérer les priorités entre les règles.
+- [x] Prendre en charge les enregistrements A et AAAA.
 
 ## 4. Filtrage DNS
 - [ ] Charger les blocklists depuis des fichiers locaux.
@@ -41,6 +41,7 @@
 - [ ] Tester sur Linux ARM64 (Raspberry Pi).
 
 ## 8. Qualité et publication
+- [x] Structurer les modules par responsabilité et centraliser les tests dans une arborescence miroir sous `tests/`.
 - [ ] Ajouter des tests unitaires et d'intégration.
 - [ ] Configurer GitHub Actions (fmt, Clippy, tests).
 - [ ] Publier une première version `v0.1.0`.

@@ -1,6 +1,27 @@
+# Configuration chargée depuis le répertoire de travail.
+# Serveur DNS UDP et TCP sur la même adresse.
 [dns]
+# IP et port obligatoires (1 à 65535). IPv6 : "[::1]:1053".
+# Pour toutes les interfaces : "0.0.0.0:1053" ou "[::]:1053".
 listen = "127.0.0.1:1053"
+# Au moins une IP explicite ; noms d'hôtes, adresses non spécifiées,
+# multicast et broadcast IPv4 global interdits. IPv6 : "[::1]:53".
 upstreams = ["1.1.1.1:53"]
+# Facultatif : 2000 ms par défaut, de 1 à 60000 ms par upstream,
+# repli TCP compris. L'upstream suivant est essayé en cas d'échec.
+upstream_timeout_ms = 2000
 
+# Section obligatoire, éventuellement vide. Noms ASCII ou punycode ;
+# point final facultatif et casse ignorée. Les doublons normalisés sont refusés.
+# Une seule IP sans port par règle : IPv4 pour A, IPv6 pour AAAA. TTL local : 60 s.
+# Un type absent répond NOERROR sans enregistrement, sans forwarding.
+# Seul le wildcard initial "*." est accepté. Les noms exacts sont prioritaires.
+# Un wildcard couvre les descendants, pas son apex ; un nom existant plus précis
+# bloque les wildcards plus généraux (ex. child.router.lan répond NXDOMAIN).
+# Les zones wildcard, apex inclus, ne sont jamais transmises aux upstreams.
 [rewrites]
 "*.lan" = "192.168.1.10"
+# Règle exacte prioritaire sur *.lan.
+"router.lan" = "192.168.1.1"
+# Ce nom répond en AAAA ; une requête A reçoit une réponse vide, sans repli wildcard.
+"nas6.lan" = "fd00::20"
