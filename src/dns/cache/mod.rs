@@ -79,6 +79,10 @@ pub struct CacheStats {
 }
 
 impl ResponseCache {
+    pub(crate) fn empty(&self) -> Self {
+        Self::new(self.config.clone())
+    }
+
     pub(crate) fn new(config: CacheConfig) -> Self {
         let minimum_weight = config.max_memory_bytes.div_ceil(config.max_entries.max(1));
         let entries = (config.enabled

@@ -1,0 +1,28 @@
+# Configuration de déploiement Docker ; montée en lecture seule.
+[dns]
+# Port interne non privilégié ; Compose publie le port 53 en UDP et TCP.
+listen = "0.0.0.0:1053"
+upstreams = ["1.1.1.1:53", "9.9.9.9:53"]
+upstream_timeout_ms = 2000
+
+[rewrites]
+"*.home.arpa" = "192.168.1.10"
+"router.home.arpa" = "192.168.1.1"
+
+[cache]
+enabled = true
+max_entries = 4096
+max_memory_bytes = 8388608
+max_ttl_secs = 86400
+
+[filtering]
+enabled = true
+cache_dir = "/var/lib/light-dns/filters"
+# Fichiers facultatifs dans le dossier docker/ monté :
+blocklists = [] # Exemple : ["/etc/light-dns/block.txt"]
+allowlist_files = [] # Exemple : ["/etc/light-dns/allow.txt"]
+allowlist = []
+# Sources par défaut : AdGuard DNS et Peter Lowe.
+# Pour les alternatives commentées HaGeZi/OISD/StevenBlack/AdAway,
+# reprendre les blocs [[filtering.sources]] du config.toml principal.
+# sources = [] # Désactiver les téléchargements, conserver les listes locales.

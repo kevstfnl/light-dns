@@ -51,3 +51,9 @@ Le poids d'une entrée estime la réponse sérialisée, le nom et une marge fixe
 L'éviction Moka est différée et sa [capacité est une cible à convergence](https://docs.rs/moka/0.12.16/moka/future/struct.Cache.html#maximum-capacity). De brefs dépassements sont possibles pendant la maintenance. Ce budget ne représente pas une limite stricte de RSS : allocateur, index Moka, filtres, buffers réseau et requêtes en vol consomment aussi de la mémoire.
 
 `DnsServer::cache_stats().await` expose le nombre d'entrées et leur poids après maintenance pour les tests et mesures locales, sans ajouter d'API HTTP ni de métriques Prometheus. Voir le [benchmark de latence et de consommation](performance.md).
+
+## Purge et rechargement
+
+`light-dns cache clear` remplace le cache actif par un cache vide, sans changer la configuration ni remettre les compteurs à zéro. Les anciennes requêtes en vol peuvent encore terminer, mais elles ne peuvent pas repeupler ce nouveau cache. La purge concerne le serveur ; elle ne vide pas les caches des clients ou navigateurs.
+
+Un `light-dns reload` réussi remplace également le cache, afin de ne pas réutiliser des réponses d'un ancien upstream ou d'anciens paramètres. Un reload rejeté laisse le cache intact. `light-dns stats` affiche notamment `cache_entries`, `cache_estimated_bytes` et `cache_hits`. Voir l'[administration locale](administration.md).

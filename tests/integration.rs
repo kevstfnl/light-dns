@@ -2,6 +2,8 @@
 
 mod app;
 mod config;
+#[cfg(target_os = "linux")]
+mod deployment;
 mod dns;
 mod filtering;
 #[cfg(target_os = "linux")]

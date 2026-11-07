@@ -30,15 +30,20 @@
 - [x] Limiter l'utilisation de la mémoire (entrées et budget pondéré estimé).
 - [x] Réaliser des benchmarks locaux de latence, CPU et RSS reproductibles.
 
-## 6. Configuration
-- [ ] Ajouter le hot reload du fichier TOML.
-- [ ] Conserver l'ancienne configuration si la nouvelle est invalide.
+## 6. Configuration et administration locale
+- [x] Recharger le TOML par commande CLI explicite, avec remplacement atomique.
+- [x] Conserver l'ancienne configuration et le cache si le rechargement échoue.
+- [x] Ajouter une commande de purge du cache DNS.
+- [x] Afficher des statistiques légères par CLI via une socket Unix protégée.
 
 ## 7. Docker
-- [ ] Créer un Dockerfile multi-stage.
-- [ ] Ajouter un `compose.yaml`.
-- [ ] Monter la configuration via un volume.
+- [x] Créer un Dockerfile multi-stage avec utilisateur non privilégié.
+- [x] Ajouter un `compose.yaml` UDP/TCP.
+- [x] Monter la configuration en lecture seule et persister les listes téléchargées.
+- [x] Tester le conteneur Linux AMD64, la CLI, UDP/TCP et l'arrêt par SIGTERM.
 - [ ] Tester sur Linux ARM64 (Raspberry Pi).
+
+Le builder disponible ne propose que Linux AMD64 ; la procédure ARM64 est documentée dans `docs/docker.md`.
 
 ## 8. Qualité et publication
 - [x] Structurer les modules par responsabilité et centraliser les tests dans une arborescence miroir sous `tests/`.

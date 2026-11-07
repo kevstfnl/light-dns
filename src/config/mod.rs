@@ -19,6 +19,7 @@ use std::{
     collections::{HashMap, hash_map::Entry},
     fs,
     net::{IpAddr, SocketAddr},
+    path::Path,
     time::Duration,
 };
 
@@ -63,7 +64,14 @@ fn default_upstream_timeout_ms() -> u64 {
 
 impl Config {
     pub fn load() -> Result<Self, ConfigError> {
-        let content = fs::read_to_string("config.toml").map_err(ConfigError::Read)?;
+        Self::load_from(Path::new("config.toml"))
+    }
+
+    pub fn load_from(path: &Path) -> Result<Self, ConfigError> {
+        let content = fs::read_to_string(path).map_err(|source| ConfigError::Read {
+            path: path.to_owned(),
+            source,
+        })?;
         Self::from_toml(&content)
     }
 

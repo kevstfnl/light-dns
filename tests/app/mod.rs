@@ -1,6 +1,9 @@
 use crate::support::process::TestDirectory;
 use std::fs;
 
+mod cli;
+#[cfg(unix)]
+mod control;
 #[cfg(unix)]
 mod shutdown;
 

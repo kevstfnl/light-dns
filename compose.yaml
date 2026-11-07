@@ -1,0 +1,35 @@
+services:
+  light-dns:
+    build: .
+    image: light-dns:local
+    user: "65532:65532"
+    restart: unless-stopped
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    ports:
+      - "${LIGHT_DNS_BIND_IP:-127.0.0.1}:${LIGHT_DNS_PORT:-53}:1053/udp"
+      - "${LIGHT_DNS_BIND_IP:-127.0.0.1}:${LIGHT_DNS_PORT:-53}:1053/tcp"
+    volumes:
+      # Monter le dossier permet aussi les sauvegardes TOML par renommage atomique.
+      - type: bind
+        source: ./docker
+        target: /etc/light-dns
+        read_only: true
+        bind:
+          create_host_path: false
+      - filter-data:/var/lib/light-dns
+    tmpfs:
+      - /run/light-dns:uid=65532,gid=65532,mode=0700,size=1m
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/light-dns", "stats"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    stop_grace_period: 10s
+
+volumes:
+  filter-data:

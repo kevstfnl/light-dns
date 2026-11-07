@@ -71,6 +71,9 @@ fn serves_dns_and_stops_on_sigterm() -> Result<(), Box<dyn std::error::Error>> {
             Err(error) => return Err(error.into()),
         }
     }
+    let mut partial_control =
+        std::os::unix::net::UnixStream::connect(directory.0.join("light-dns.sock"))?;
+    std::io::Write::write_all(&mut partial_control, b"rel")?;
     assert!(
         Command::new("kill")
             .args(["-TERM", &child.0.id().to_string()])
@@ -88,5 +91,6 @@ fn serves_dns_and_stops_on_sigterm() -> Result<(), Box<dyn std::error::Error>> {
     }
     let _udp = UdpSocket::bind(address)?;
     let _tcp = TcpListener::bind(address)?;
+    assert!(!directory.0.join("light-dns.sock").exists());
     Ok(())
 }

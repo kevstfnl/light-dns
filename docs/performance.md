@@ -20,17 +20,17 @@ Les scénarios couvrent le forwarding sans cache, les lectures d'un cache chaud,
 
 ## Mesure de référence
 
-Mesure réalisée le 7 novembre 2026 : Linux x86_64, AMD Ryzen AI 7 350, Rust 1.99.1, profil release du projet. Cache par défaut : 4096 entrées et budget pondéré de 8388608 octets. Deux exécutions ont réussi ; le tableau reprend la dernière, sans isolation des autres activités de la machine.
+Mesure réalisée le 7 novembre 2026 : Linux x86_64, AMD Ryzen AI 7 350, Rust 1.99.1, profil release du projet. Cache par défaut : 4096 entrées et budget pondéré de 8388608 octets. Le tableau reprend la mesure après ajout de l'état partagé et des compteurs CLI, sans commande administrative concurrente ni isolation des autres activités de la machine.
 
 | Scénario | Médiane µs | p95 µs | Requêtes/s | CPU ms | RSS avant → après Kio | Entrées | Poids estimé octets | Échanges upstream |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| Forwarding sans cache | 31,84 | 44,73 | 29988 | 170 | 6368 → 6436 | 0 | 0 | 5000 |
-| Cache chaud | 11,62 | 13,54 | 84960 | 50 | 6556 → 6556 | 1 | 2048 | 0 |
-| Rewrite local | 11,26 | 12,59 | 87553 | 50 | 6596 → 6596 | 0 | 0 | 0 |
-| Domaine bloqué | 10,23 | 15,18 | 91120 | 60 | 7832 → 7872 | 0 | 0 | 0 |
-| Cache sous pression | 35,28 | 53,42 | 26505 | 190 | 7972 → 10604 | 4096 | 8388608 | 5000 |
+| Forwarding sans cache | 31,13 | 43,62 | 30832 | 160 | 6692 → 6760 | 0 | 0 | 5000 |
+| Cache chaud | 10,14 | 12,77 | 96233 | 50 | 6988 → 6988 | 1 | 2048 | 0 |
+| Rewrite local | 8,39 | 11,40 | 110233 | 40 | 7052 → 7052 | 0 | 0 | 0 |
+| Domaine bloqué | 9,90 | 12,67 | 98760 | 40 | 8240 → 8280 | 0 | 0 | 0 |
+| Cache sous pression | 35,04 | 51,37 | 26802 | 200 | 8444 → 10948 | 4096 | 8388608 | 5000 |
 
-Dans cette mesure, le cache chaud divise la latence médiane par environ 2,7 et supprime les échanges upstream des lectures mesurées. Le scénario sous pression montre le coût des insertions et l'éviction au budget configuré.
+Dans cette mesure, le cache chaud divise la latence médiane par environ 3,1 et supprime les échanges upstream des lectures mesurées. Le scénario sous pression montre le coût des insertions et l'éviction au budget configuré.
 
 ## Limites d'interprétation
 

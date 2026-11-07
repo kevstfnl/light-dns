@@ -1,5 +1,6 @@
 mod handler;
 mod response;
+mod runtime;
 
 use crate::support::{TestResult, dns::*};
 use hickory_proto::op::{Message, ResponseCode};

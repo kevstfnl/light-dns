@@ -45,6 +45,12 @@ fn assert_invalid(content: &str, expected_field: &str) {
 #[test]
 fn provided_configuration_is_valid() -> Result<(), ConfigError> {
     Config::from_toml(include_str!("../../config.toml"))?;
+    let docker = Config::from_toml(include_str!("../../docker/config.toml"))?;
+    assert_eq!(docker.dns.listen.to_string(), "0.0.0.0:1053");
+    assert_eq!(
+        docker.filtering.cache_dir.to_string_lossy(),
+        "/var/lib/light-dns/filters"
+    );
     Ok(())
 }
 

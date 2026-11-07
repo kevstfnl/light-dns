@@ -2,9 +2,9 @@
 
 Un serveur DNS léger et sans interface graphique, développé en Rust pour les homelabs et les environnements à ressources limitées.
 
-Configuration simple et faible consommation de ressources. Le déploiement Docker est prévu.
+Configuration simple, faible consommation de ressources et déploiement Docker.
 
-> **Statut :** Serveur DNS UDP/TCP avec forwarding, rewrites locaux A/AAAA, blocklists, allowlist, cache DNS avec expiration et configuration TOML validée.
+> **Statut :** Serveur DNS UDP/TCP avec forwarding, rewrites locaux A/AAAA, filtrage, cache DNS, commandes locales d'administration et déploiement Docker. Validation ARM64 sur Raspberry Pi encore à effectuer.
 
 ## Fonctionnalités disponibles
 
@@ -14,12 +14,9 @@ Configuration simple et faible consommation de ressources. Le déploiement Docke
 - Filtrage de domaines avec listes classiques par défaut, exceptions et mises à jour automatiques.
 - Cache des réponses upstream avec TTL décroissants, cache négatif SOA et budget mémoire configurable.
 - Configuration exclusivement TOML et erreurs de démarrage explicites.
+- Commandes CLI locales : purge du cache, rechargement TOML et statistiques.
+- Dockerfile multi-stage et Compose avec utilisateur non privilégié.
 - Arrêt sur `SIGINT` (Ctrl+C) et `SIGTERM` sous Linux.
-
-## Fonctionnalités prévues
-
-- **Hot reload TOML** — Rechargement de la configuration sans arrêt du service.
-- **Docker** — Déploiement léger avec Docker Compose.
 
 ## Fonctionnement
 
@@ -73,7 +70,7 @@ max_memory_bytes = 8388608
 max_ttl_secs = 86400
 ```
 
-Le fichier `config.toml` est lu depuis le répertoire de travail. Les sections `[dns]` et `[rewrites]`, ainsi que `listen` et `upstreams`, sont obligatoires ; `[rewrites]` peut être vide. Les champs inconnus sont refusés.
+Le fichier `config.toml` est lu depuis le répertoire de travail, ou sélectionné avec `--config CHEMIN`. Les chemins relatifs des listes restent relatifs au répertoire de travail. Les sections `[dns]` et `[rewrites]`, ainsi que `listen` et `upstreams`, sont obligatoires ; `[rewrites]` peut être vide. Les champs inconnus sont refusés.
 
 - **Adresses DNS :** IP et port obligatoires, avec un port entre 1 et 65535. IPv6 doit être entre crochets, par exemple `[::1]:5353`. Les noms d'hôtes ne sont pas acceptés comme endpoints.
 - **Upstreams :** au moins une adresse ; les adresses non spécifiées (`0.0.0.0`, `::`), multicast et broadcast IPv4 global (`255.255.255.255`) sont refusées, y compris sous forme IPv6 mappée. Les adresses privées et loopback sont acceptées. L'écoute peut utiliser `0.0.0.0` ou `::`.
@@ -82,7 +79,7 @@ Le fichier `config.toml` est lu depuis le répertoire de travail. Les sections `
 - **Wildcards :** seul un préfixe `*.` suivi d'un domaine est accepté, par exemple `*.lan`. Les noms sont normalisés en minuscules avec un point final ; deux règles équivalentes, comme `NAS.LAN` et `nas.lan.`, sont refusées.
 - **Destinations des rewrites :** une seule adresse IPv4 ou IPv6 par règle, sans port ni crochets. Un même nom ne peut pas encore publier les deux familles simultanément.
 
-La validation de configuration ne contacte pas les upstreams. Les changements de configuration nécessitent un redémarrage.
+La validation de configuration ne contacte pas les upstreams. Appliquer les changements avec `light-dns reload` ; une configuration invalide conserve l'état actif. Un changement de `dns.listen` nécessite un redémarrage.
 
 ## Filtrage et listes par défaut
 
@@ -101,6 +98,38 @@ Le cache est actif par défaut et se règle dans `[cache]` : 4096 entrées, budg
 Les réponses complètes peuvent être réutilisées entre UDP et TCP, avec adaptation à chaque client. Les réponses négatives exigent un SOA pertinent ; leur durée suit le minimum du TTL du SOA et de son champ MINIMUM. Les erreurs, TTL nuls et réponses contenant des signatures DNSSEC restent hors cache. Aucun historique de requêtes n'est écrit sur disque.
 
 Voir les [règles et limites du cache](docs/cache.md) et le [benchmark local reproductible](docs/performance.md), incluant latence, CPU et mémoire.
+
+## Commandes locales
+
+Depuis le même répertoire et avec le même utilisateur que le serveur :
+
+```bash
+light-dns                 # Démarrer ; commande serve également disponible
+light-dns cache clear     # Remplacer le cache actif par un cache vide
+light-dns reload          # Relire le fichier TOML utilisé au démarrage
+light-dns stats           # Compteurs et état du cache, au format TOML
+```
+
+Avec Cargo, utiliser par exemple `cargo run -- stats`. L'administration utilise une socket Unix `light-dns.sock` protégée en mode `0600`, sans port réseau. `--socket CHEMIN` sélectionne un autre chemin pour le serveur et ses clients. Aucun fichier TOML n'est nécessaire pour lancer `stats` ou demander un reload ; le serveur conserve le chemin du fichier à relire.
+
+Le rechargement prépare puis remplace atomiquement rewrites, filtres, upstreams et paramètres de cache. Une réussite vide le cache DNS ; un échec conserve la configuration et le cache actifs. Les requêtes en cours terminent avec leur ancien état et les connexions TCP restent ouvertes. Les compteurs persistent jusqu'au redémarrage. Il n'y a pas de surveillance automatique du TOML ; l'actualisation périodique des listes de filtres reste active.
+
+Voir le [détail des commandes et statistiques](docs/administration.md).
+
+## Docker
+
+Adapter `docker/config.toml`, puis démarrer :
+
+```bash
+docker compose up -d --build
+docker compose exec light-dns light-dns stats
+docker compose exec light-dns light-dns cache clear
+docker compose exec light-dns light-dns reload
+```
+
+Compose publie le DNS sur `127.0.0.1:53` en UDP et TCP par défaut. Pour servir le LAN, définir `LIGHT_DNS_BIND_IP` sur l'adresse LAN de l'hôte. La configuration est montée en lecture seule, les listes téléchargées persistent dans un volume et le service utilise l'UID/GID 65532.
+
+Voir le [déploiement Docker](docs/docker.md) pour les ports, les montages, les tests et ARM64.
 
 ## Développement
 
@@ -132,7 +161,7 @@ cargo test
 cargo check
 ```
 
-Le support Docker sera ajouté dans une prochaine version.
+Les tests Docker et le benchmark sont ignorés par défaut ; leurs commandes d'exécution figurent dans la documentation dédiée.
 
 ## Organisation du code
 
@@ -142,6 +171,10 @@ src/
 ├── lib.rs                   # Modules de l'application
 ├── app/
 │   ├── mod.rs               # Démarrage et cycle de vie
+│   ├── cli.rs               # Arguments et commandes du binaire
+│   ├── control/
+│   │   ├── mod.rs           # Exécution des commandes locales
+│   │   └── socket.rs        # Socket Unix, permissions et messages bornés
 │   └── shutdown.rs          # Signaux d'arrêt
 ├── config/
 │   ├── mod.rs               # Chargement TOML et types validés
@@ -159,6 +192,8 @@ src/
 │   └── server/
 │       ├── mod.rs           # Écoutes UDP/TCP et cycle de vie du serveur
 │       ├── handler.rs       # Traitement des requêtes
+│       ├── runtime.rs       # État partagé et rechargement atomique
+│       ├── stats.rs         # Compteurs légers
 │       └── response.rs      # Réponses DNS, EDNS et troncature
 └── filtering/
     ├── mod.rs               # État partagé des filtres
@@ -168,9 +203,10 @@ src/
     └── updater.rs           # Chargement et actualisation des listes
 tests/
 ├── integration.rs           # Point d'entrée unique de la suite de tests
-├── app/                     # Démarrage du binaire et arrêt
+├── app/                     # CLI, contrôle local, démarrage et arrêt
 ├── config/                  # Chargement et validation
-├── dns/                     # Cache, forwarding, rewrites et server/{handler,response}
+├── dns/                     # Cache, forwarding, rewrites et serveur
+├── deployment/              # Test Docker explicite
 ├── filtering/               # Formats de listes, priorités, téléchargements et mises à jour
 ├── performance/             # Benchmark Linux de latence, CPU et mémoire
 └── support/                 # Fixtures DNS et processus de test

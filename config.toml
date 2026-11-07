@@ -1,4 +1,6 @@
 # Configuration chargée depuis le répertoire de travail.
+# Après modification : light-dns reload. Un changement d'écoute demande un redémarrage.
+# Administration locale : light-dns cache clear / light-dns stats.
 # Serveur DNS UDP et TCP sur la même adresse.
 [dns]
 # IP et port obligatoires (1 à 65535). IPv6 : "[::1]:1053".

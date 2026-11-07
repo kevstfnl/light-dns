@@ -67,7 +67,7 @@ impl FilterIndex {
         matches!(strongest, Some(Action::Block | Action::ImportantBlock))
     }
 
-    pub(super) fn len(&self) -> usize {
+    pub(crate) fn len(&self) -> usize {
         self.rules.len()
     }
 }

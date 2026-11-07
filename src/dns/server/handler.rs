@@ -1,13 +1,6 @@
 use super::response::{error_response, response_edns, send_response};
-use crate::{
-    config::Config,
-    dns::{
-        cache::{CacheKey, ResponseCache},
-        forwarder::Forwarder,
-        rewrites::Rewrites,
-    },
-    filtering::SharedFilters,
-};
+use super::{runtime::Runtime, stats::Counters};
+use crate::dns::cache::CacheKey;
 use hickory_proto::{
     op::{Message, OpCode, ResponseCode},
     rr::RecordType,
@@ -16,25 +9,20 @@ use hickory_server::{
     net::runtime::Time,
     server::{Request, RequestHandler, ResponseHandler, ResponseInfo},
 };
+use std::sync::Arc;
 use tokio::sync::Semaphore;
 
 const MAX_IN_FLIGHT: usize = 256;
 
 pub(super) struct Handler {
-    forwarder: Forwarder,
-    rewrites: Rewrites,
-    filters: SharedFilters,
-    cache: ResponseCache,
+    runtime: Arc<Runtime>,
     permits: Semaphore,
 }
 
 impl Handler {
-    pub(super) fn new(config: Config, filters: SharedFilters, cache: ResponseCache) -> Self {
+    pub(super) fn new(runtime: Arc<Runtime>) -> Self {
         Self {
-            forwarder: Forwarder::new(config.dns.upstreams, config.dns.upstream_timeout),
-            rewrites: Rewrites::new(config.rewrites),
-            filters,
-            cache,
+            runtime,
             permits: Semaphore::new(MAX_IN_FLIGHT),
         }
     }
@@ -57,17 +45,26 @@ impl Handler {
         {
             return error_response(request, ResponseCode::Refused);
         }
-        if let Some(response) = self
+        let resolver = self.runtime.current.load_full();
+        if let Some(response) = resolver
             .rewrites
             .resolve(info.query.original(), &request.metadata)
         {
+            Counters::increment(&self.runtime.counters.local_answers);
             return response;
         }
-        if self.filters.load().is_blocked(info.query.original().name()) {
+        if resolver
+            .filters
+            .load()
+            .is_blocked(info.query.original().name())
+        {
+            Counters::increment(&self.runtime.counters.blocked);
             return error_response(request, ResponseCode::NXDomain);
         }
         let key = CacheKey::new(info.query.original(), request);
-        if let Some(response) = self.cache.get(&key).await {
+        let cache = resolver.cache.load_full();
+        if let Some(response) = cache.get(&key).await {
+            Counters::increment(&self.runtime.counters.cache_hits);
             return response;
         }
         if !request.metadata.recursion_desired {
@@ -82,9 +79,14 @@ impl Handler {
         message.metadata.checking_disabled = request.metadata.checking_disabled;
         message.metadata.authentic_data = request.metadata.authentic_data;
         message.edns = response_edns(request);
-        match self.forwarder.forward(message, request.protocol()).await {
+        Counters::increment(&self.runtime.counters.forwarded);
+        match resolver
+            .forwarder
+            .forward(message, request.protocol())
+            .await
+        {
             Ok(response) => {
-                self.cache.insert(key, &response).await;
+                cache.insert(key, &response).await;
                 response
             }
             Err(error) => {
@@ -102,6 +104,14 @@ impl RequestHandler for Handler {
         request: &Request,
         response_handle: R,
     ) -> ResponseInfo {
-        send_response(request, self.resolve(request).await, response_handle).await
+        Counters::increment(&self.runtime.counters.requests);
+        let response = self.resolve(request).await;
+        if !matches!(
+            response.response_code,
+            ResponseCode::NoError | ResponseCode::NXDomain
+        ) {
+            Counters::increment(&self.runtime.counters.errors);
+        }
+        send_response(request, response, response_handle).await
     }
 }
