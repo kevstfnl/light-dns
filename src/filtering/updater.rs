@@ -180,6 +180,9 @@ impl Updater {
                     }
                 }
             }
+            // Une liste valide reste active même si sa sauvegarde échoue, mais
+            // sa persistance doit être réessayée sans attendre les prochaines 24 h.
+            failed |= self.remotes.iter().any(|remote| remote.cache_dirty);
             let delay = if failed {
                 self.config.update_interval.min(Duration::from_secs(300))
             } else {

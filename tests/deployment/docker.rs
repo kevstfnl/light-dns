@@ -46,15 +46,45 @@ impl Container {
         args.extend(command.iter().map(|arg| arg.to_string()));
         docker(args).await
     }
+
+    async fn wait_healthy(&self) -> TestResult {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
+        loop {
+            let health =
+                checked(&["inspect", "--format", "{{.State.Health.Status}}", &self.0]).await?;
+            if health == "healthy" {
+                return Ok(());
+            }
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "healthcheck : {health}"
+            );
+            sleep(Duration::from_millis(100)).await;
+        }
+    }
 }
 
 #[tokio::test]
 #[ignore = "nécessite Docker et l'image light-dns:validation construite localement"]
 async fn nonroot_image_serves_udp_tcp_reloads_and_stops_cleanly() -> TestResult {
     let directory = TestDirectory::new()?;
+    let image =
+        std::env::var("LIGHT_DNS_TEST_IMAGE").unwrap_or_else(|_| "light-dns:validation".into());
+    assert_eq!(
+        checked(&[
+            "image",
+            "inspect",
+            "--format",
+            "{{.Os}}/{{.Architecture}}",
+            &image
+        ])
+        .await?,
+        "linux/amd64",
+        "validation réservée à AMD64"
+    );
     std::fs::set_permissions(&directory.0, std::fs::Permissions::from_mode(0o755))?;
     let path = directory.0.join("config.toml");
-    let config = "[dns]\nlisten = '0.0.0.0:1053'\nupstreams = ['127.0.0.1:9']\n[rewrites]\n'*.home.arpa' = '192.168.1.10'\n[filtering]\nenabled = false\n";
+    let config = "[dns]\nlisten = '0.0.0.0:1053'\nupstreams = ['127.0.0.1:9']\n[rewrites]\n'*.home.arpa' = '192.168.1.10'\n[filtering]\ncache_dir = '/var/lib/light-dns/filters'\n[[filtering.sources]]\nname = 'test'\nurl = 'http://127.0.0.1:9/list.txt'\n";
     tokio::fs::write(&path, config).await?;
     std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644))?;
     let mount = format!(
@@ -63,6 +93,8 @@ async fn nonroot_image_serves_udp_tcp_reloads_and_stops_cleanly() -> TestResult 
     );
     let id = checked(&[
         "run",
+        "--platform",
+        "linux/amd64",
         "--detach",
         "--read-only",
         "--user",
@@ -81,10 +113,19 @@ async fn nonroot_image_serves_udp_tcp_reloads_and_stops_cleanly() -> TestResult 
         "127.0.0.1::1053/udp",
         "--publish",
         "127.0.0.1::1053/tcp",
-        "light-dns:validation",
+        "--health-cmd",
+        "/usr/local/bin/light-dns stats",
+        "--health-interval",
+        "1s",
+        "--health-timeout",
+        "5s",
+        "--health-retries",
+        "3",
+        &image,
     ])
     .await?;
     let container = Container(id);
+    container.wait_healthy().await?;
     let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
     while !container.cli(&["stats"]).await?.status.success() {
         assert!(
@@ -157,6 +198,23 @@ async fn nonroot_image_serves_udp_tcp_reloads_and_stops_cleanly() -> TestResult 
     let stats: toml::Table = toml::from_str(&String::from_utf8(stats.stdout)?)?;
     assert_eq!(stats["reloads"].as_integer(), Some(1));
     assert_eq!(stats["cache_clears"].as_integer(), Some(1));
+    // Seed an authentic cache using the container UID and its persistent volume.
+    // Download/save behavior itself is covered by the local HTTP integration tests.
+    checked(&["exec", &container.0, "sh", "-c", "printf '%s\n' '! light-dns source http://127.0.0.1:9/list.txt' 'blocked.test' > /var/lib/light-dns/filters/test.txt"]).await?;
+    checked(&["restart", "--timeout", "8", &container.0]).await?;
+    container.wait_healthy().await?;
+    let udp_address = container.port("udp").await?;
+    assert_eq!(
+        udp(udp_address, &query("blocked.test.")?)
+            .await?
+            .0
+            .response_code,
+        ResponseCode::NXDomain
+    );
+    let stats = container.cli(&["stats"]).await?;
+    assert!(stats.status.success());
+    let stats: toml::Table = toml::from_str(&String::from_utf8(stats.stdout)?)?;
+    assert_eq!(stats["filter_rules"].as_integer(), Some(1));
     checked(&["stop", "--timeout", "8", &container.0]).await?;
     assert_eq!(
         checked(&["inspect", "--format", "{{.State.ExitCode}}", &container.0]).await?,

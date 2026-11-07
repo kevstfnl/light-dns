@@ -1,3 +1,4 @@
+mod forwarding;
 mod measurement;
 
 use crate::support::{TestResult, dns::*, process::TestDirectory};

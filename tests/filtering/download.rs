@@ -33,6 +33,152 @@ async fn wait_for_hit(http: &HttpServer, count: usize) {
 }
 
 #[tokio::test]
+async fn first_start_serves_local_rules_then_activates_the_remote_list() -> TestResult {
+    let directory = TestDirectory::new()?;
+    let http = HttpServer::gated("remote.test\n").await?;
+    let (mut config, _upstream) = TestServer::config(&directory).await?;
+    let local = directory.0.join("block.txt");
+    tokio::fs::write(&local, "local.test\n").await?;
+    config.filtering.blocklists = vec![local];
+    config.filtering.sources = vec![FilterSource {
+        name: "test".into(),
+        url: http.url.clone(),
+    }];
+    let (mut server, address) = bind(config).await?;
+    wait_for_hit(&http, 1).await;
+    assert_eq!(
+        udp(address, &query("local.test.")?).await?.0.response_code,
+        ResponseCode::NXDomain
+    );
+    assert_eq!(
+        udp(address, &query("remote.test.")?).await?.0.response_code,
+        ResponseCode::NoError
+    );
+    http.release();
+    wait_for_code(address, "remote.test.", ResponseCode::NXDomain).await?;
+    server.shutdown_gracefully().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn unavailable_first_download_preserves_local_filtering_and_dns_service() -> TestResult {
+    let directory = TestDirectory::new()?;
+    let http = HttpServer::new("unavailable").await?;
+    http.set(503, "unavailable", true, 0);
+    let (mut config, _upstream) = TestServer::config(&directory).await?;
+    let local = directory.0.join("block.txt");
+    tokio::fs::write(&local, "local.test\n").await?;
+    config.filtering.blocklists = vec![local];
+    config.filtering.sources = vec![FilterSource {
+        name: "test".into(),
+        url: http.url.clone(),
+    }];
+    config.filtering.update_interval = Duration::from_secs(1);
+    let (mut server, address) = bind(config).await?;
+    wait_for_hit(&http, 2).await;
+    assert_eq!(
+        udp(address, &query("local.test.")?).await?.0.response_code,
+        ResponseCode::NXDomain
+    );
+    assert_eq!(
+        udp(address, &query("allowed.test.")?)
+            .await?
+            .0
+            .answers
+            .len(),
+        1
+    );
+    server.shutdown_gracefully().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn invalid_disk_cache_is_ignored_until_a_valid_download_replaces_it() -> TestResult {
+    let directory = TestDirectory::new()?;
+    let http = HttpServer::gated("valid.test\n").await?;
+    let cache = directory.0.join("cache");
+    tokio::fs::create_dir(&cache).await?;
+    let path = cache.join("test.txt");
+    let invalid = format!(
+        "! light-dns source {}\n<html>invalid.test</html>\n",
+        http.url
+    );
+    tokio::fs::write(&path, &invalid).await?;
+    let (mut server, address, _upstream) = start_remote(&directory, &http.url, 86400, 8192).await?;
+    wait_for_hit(&http, 1).await;
+    assert_eq!(
+        udp(address, &query("valid.test.")?).await?.0.response_code,
+        ResponseCode::NoError
+    );
+    assert_eq!(tokio::fs::read_to_string(&path).await?, invalid);
+    http.release();
+    wait_for_code(address, "valid.test.", ResponseCode::NXDomain).await?;
+    assert!(
+        tokio::fs::read_to_string(&path)
+            .await?
+            .ends_with("valid.test\n")
+    );
+    server.shutdown_gracefully().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn failed_cache_write_retries_within_five_minutes_without_redownloading() -> TestResult {
+    let directory = TestDirectory::new()?;
+    let http = HttpServer::gated("new.test\n").await?;
+    let cache = directory.0.join("cache");
+    tokio::fs::create_dir(&cache).await?;
+    let path = cache.join("test.txt");
+    let previous = format!("! light-dns source {}\nold.test\n", http.url);
+    tokio::fs::write(&path, &previous).await?;
+    std::fs::File::open(&path)?.set_modified(std::time::UNIX_EPOCH)?;
+    let (mut server, address, upstream) = start_remote(&directory, &http.url, 86400, 8192).await?;
+    wait_for_hit(&http, 1).await;
+    assert_eq!(
+        udp(address, &query("old.test.")?).await?.0.response_code,
+        ResponseCode::NXDomain
+    );
+    // A regular file at cache_dir makes saving fail even when tests run as root.
+    let backup = directory.0.join("backup");
+    tokio::fs::rename(&cache, &backup).await?;
+    tokio::fs::write(&cache, "unavailable").await?;
+    http.release();
+    wait_for_code(address, "new.test.", ResponseCode::NXDomain).await?;
+    assert_eq!(
+        tokio::fs::read_to_string(backup.join("test.txt")).await?,
+        previous
+    );
+    tokio::fs::remove_file(&cache).await?;
+    tokio::fs::rename(&backup, &cache).await?;
+    tokio::time::pause();
+    tokio::time::advance(Duration::from_secs(301)).await;
+    tokio::time::resume();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !tokio::fs::read_to_string(&path)
+        .await?
+        .ends_with("new.test\n")
+    {
+        assert!(
+            Instant::now() < deadline,
+            "cache non sauvegardé après 301 secondes"
+        );
+        sleep(Duration::from_millis(10)).await;
+    }
+    assert_eq!(http.hits.load(Ordering::SeqCst), 1);
+    server.shutdown_gracefully().await?;
+    drop(upstream);
+    let url = http.url.clone();
+    drop(http);
+    let (mut server, address, _upstream) = start_remote(&directory, &url, 86400, 8192).await?;
+    assert_eq!(
+        udp(address, &query("new.test.")?).await?.0.response_code,
+        ResponseCode::NXDomain
+    );
+    server.shutdown_gracefully().await?;
+    Ok(())
+}
+
+#[tokio::test]
 async fn downloads_updates_and_uses_disk_cache_offline() -> TestResult {
     let directory = TestDirectory::new()?;
     let http = HttpServer::new("||old.test^\n").await?;

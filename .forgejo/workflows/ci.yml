@@ -1,0 +1,96 @@
+name: Rust and container
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: "Tag de l’image à publier (ex. 0.1.0 ou latest)"
+        required: true
+        default: latest
+
+jobs:
+  check:
+    runs-on: ${{ vars.FORGEJO_CI_RUNNER || 'ubuntu-latest' }}
+    timeout-minutes: 15
+    env:
+      RUSTUP_TOOLCHAIN: 1.99.1
+    steps:
+      - name: Require Linux AMD64
+        run: test "$(uname -sm)" = 'Linux x86_64'
+      - uses: https://code.forgejo.org/actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Install Rust
+        run: rustup toolchain install 1.99.1 --profile minimal --component rustfmt --component clippy
+      - uses: https://github.com/Swatinem/rust-cache@v2
+      - run: cargo fmt --all -- --check
+      - run: cargo clippy --all-targets -- -D warnings
+      - run: cargo test --locked
+      - run: cargo check --locked
+
+  image:
+    # La publication exige un déclenchement manuel, jamais une PR ou un push ordinaire.
+    if: forgejo.event_name == 'workflow_dispatch'
+    needs: check
+    runs-on: ${{ vars.FORGEJO_DOCKER_RUNNER || 'docker-amd64' }}
+    timeout-minutes: 30
+    steps:
+      - uses: https://code.forgejo.org/actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Image coordinates
+        id: image
+        shell: bash
+        env:
+          SERVER_URL: ${{ forgejo.server_url }}
+          REPOSITORY: ${{ forgejo.repository }}
+          IMAGE_TAG: ${{ inputs.image_tag }}
+        run: |
+          set -euo pipefail
+          [[ "$IMAGE_TAG" =~ ^[a-zA-Z0-9_][a-zA-Z0-9_.-]{0,127}$ ]] || {
+            echo 'Tag Docker invalide' >&2
+            exit 1
+          }
+          registry="${SERVER_URL#*://}"
+          registry="${registry%%/*}"
+          image="$(printf '%s/%s' "$registry" "$REPOSITORY" | tr '[:upper:]' '[:lower:]')"
+          registry="${image%%/*}"
+          printf 'registry=%s\nimage=%s\ntag=%s\n' "$registry" "$image" "$IMAGE_TAG" >> "$FORGEJO_OUTPUT"
+      - name: Build AMD64 image
+        shell: bash
+        env:
+          IMAGE: ${{ steps.image.outputs.image }}
+          IMAGE_TAG: ${{ steps.image.outputs.tag }}
+          SOURCE: ${{ forgejo.server_url }}/${{ forgejo.repository }}
+          REVISION: ${{ forgejo.sha }}
+        run: |
+          set -euo pipefail
+          [[ "$(docker info --format '{{.OSType}}/{{.Architecture}}')" == 'linux/x86_64' ]] || {
+            echo 'Ce workflow exige un moteur Docker Linux AMD64' >&2
+            exit 1
+          }
+          docker build --platform linux/amd64 \
+            --label "org.opencontainers.image.source=$SOURCE" \
+            --label "org.opencontainers.image.revision=$REVISION" \
+            --label 'org.opencontainers.image.licenses=MIT' \
+            --tag "$IMAGE:$IMAGE_TAG" .
+          docker run --rm --network none "$IMAGE:$IMAGE_TAG" --help
+      - name: Publish to Forgejo registry
+        shell: bash
+        env:
+          REGISTRY: ${{ steps.image.outputs.registry }}
+          IMAGE: ${{ steps.image.outputs.image }}
+          IMAGE_TAG: ${{ steps.image.outputs.tag }}
+          REGISTRY_USER: ${{ vars.FORGEJO_REGISTRY_USER }}
+          REGISTRY_TOKEN: ${{ secrets.FORGEJO_REGISTRY_TOKEN }}
+        run: |
+          set -euo pipefail
+          : "${REGISTRY_USER:?Configurer FORGEJO_REGISTRY_USER}"
+          : "${REGISTRY_TOKEN:?Configurer FORGEJO_REGISTRY_TOKEN}"
+          export DOCKER_CONFIG
+          DOCKER_CONFIG="$(mktemp -d)"
+          trap 'rm -rf -- "$DOCKER_CONFIG"' EXIT
+          printf '%s' "$REGISTRY_TOKEN" | docker login "$REGISTRY" --username "$REGISTRY_USER" --password-stdin
+          docker push "$IMAGE:$IMAGE_TAG"

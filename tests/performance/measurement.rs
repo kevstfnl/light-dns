@@ -8,7 +8,11 @@ pub(super) struct Usage {
 
 impl Usage {
     pub fn read() -> TestResult<Self> {
-        let stat = fs::read_to_string("/proc/self/stat")?;
+        Self::read_process("self")
+    }
+
+    pub fn read_process(pid: &str) -> TestResult<Self> {
+        let stat = fs::read_to_string(format!("/proc/{pid}/stat"))?;
         let tail = stat
             .rsplit_once(')')
             .ok_or_else(|| io::Error::other("stat /proc invalide"))?
@@ -22,7 +26,7 @@ impl Usage {
             .get(12)
             .ok_or_else(|| io::Error::other("stime absent"))?
             .parse()?;
-        let status = fs::read_to_string("/proc/self/status")?;
+        let status = fs::read_to_string(format!("/proc/{pid}/status"))?;
         let rss_kib = status
             .lines()
             .find_map(|line| line.strip_prefix("VmRSS:"))

@@ -1,7 +1,7 @@
 services:
   light-dns:
     build: .
-    image: light-dns:local
+    image: "${LIGHT_DNS_IMAGE:-light-dns:local}"
     user: "65532:65532"
     restart: unless-stopped
     read_only: true

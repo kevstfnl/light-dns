@@ -9,8 +9,9 @@ use light_dns::{
 };
 use std::{collections::HashMap, time::Duration};
 use tokio::{
-    net::{TcpStream, UdpSocket},
-    time::timeout,
+    net::{TcpListener, TcpStream, UdpSocket},
+    task::JoinSet,
+    time::{sleep, timeout},
 };
 
 #[tokio::test]
@@ -167,6 +168,10 @@ async fn rejects_mismatched_or_invalid_upstream_responses() -> TestResult {
         assert_eq!(response.message_type, MessageType::Response);
         assert_eq!(response.op_code, OpCode::Query);
         assert_eq!(response.answers, answer(&request).answers);
+        let mut stream = TcpStream::connect(address).await?;
+        write_tcp(&mut stream, &request).await?;
+        let response = timeout(Duration::from_secs(3), read_tcp(&mut stream)).await??;
+        assert_eq!(response.answers, answer(&request).answers);
         server.shutdown_gracefully().await?;
     }
     Ok(())
@@ -199,6 +204,87 @@ async fn ipv6_udp_and_tcp_forwarding() -> TestResult {
             .answers,
         answer(&request).answers
     );
+    server.shutdown_gracefully().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn refused_and_truncated_tcp_responses_try_the_next_upstream() -> TestResult {
+    fn refused(request: &Message) -> Message {
+        let mut response = answer(request);
+        response.metadata.response_code = ResponseCode::Refused;
+        response
+    }
+    fn truncated(request: &Message) -> Message {
+        let mut response = answer(request);
+        response.metadata.truncation = true;
+        response
+    }
+    let healthy = Upstream::start(answer, answer).await?;
+    for response in [refused, truncated] {
+        let bad = Upstream::start(response, response).await?;
+        let (mut server, address) = start(vec![bad.address, healthy.address]).await?;
+        let request = query("failover.test.")?;
+        assert_eq!(
+            udp(address, &request).await?.0.answers,
+            answer(&request).answers
+        );
+        let mut stream = TcpStream::connect(address).await?;
+        write_tcp(&mut stream, &request).await?;
+        let response = timeout(Duration::from_secs(3), read_tcp(&mut stream)).await??;
+        assert!(!response.truncation);
+        assert_eq!(response.response_code, ResponseCode::NoError);
+        assert_eq!(response.answers, answer(&request).answers);
+        server.shutdown_gracefully().await?;
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn udp_and_tcp_fallback_share_one_upstream_deadline() -> TestResult {
+    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    let slow_address = listener.local_addr()?;
+    let socket = UdpSocket::bind(slow_address).await?;
+    let mut tasks = JoinSet::new();
+    tasks.spawn(async move {
+        let mut bytes = [0; 4096];
+        let (length, peer) = socket.recv_from(&mut bytes).await?;
+        let request = Message::from_vec(&bytes[..length])?;
+        sleep(Duration::from_millis(80)).await;
+        let mut response = answer(&request);
+        response.metadata.truncation = true;
+        socket.send_to(&response.to_vec()?, peer).await?;
+        TestResult::Ok(())
+    });
+    tasks.spawn(async move {
+        let (mut stream, _) = listener.accept().await?;
+        let request = read_tcp(&mut stream).await?;
+        sleep(Duration::from_millis(80)).await;
+        // Fits a fresh 120 ms TCP budget, but not the remaining upstream budget.
+        let _ = write_tcp(&mut stream, &answer(&request)).await;
+        TestResult::Ok(())
+    });
+    fn distinct(request: &Message) -> Message {
+        let mut response = answer(request);
+        response.answers[0].ttl = 42;
+        response
+    }
+    let healthy = Upstream::start(distinct, distinct).await?;
+    let mut config = test_config(vec![slow_address, healthy.address])?;
+    config.dns.upstream_timeout = Duration::from_millis(120);
+    let (mut server, address) = bind(config).await?;
+    let request = query("deadline.test.")?;
+    assert_eq!(
+        udp(address, &request).await?.0.answers,
+        distinct(&request).answers
+    );
+    timeout(Duration::from_secs(3), async {
+        while let Some(result) = tasks.join_next().await {
+            result??;
+        }
+        TestResult::Ok(())
+    })
+    .await??;
     server.shutdown_gracefully().await?;
     Ok(())
 }

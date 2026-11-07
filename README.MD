@@ -52,7 +52,7 @@ Exemple de fichier `config.toml` :
 
 ```toml
 [dns]
-listen = "0.0.0.0:5353"
+listen = "127.0.0.1:1053"
 upstreams = ["1.1.1.1:53", "9.9.9.9:53"]
 # Facultatif : délai par upstream, repli TCP compris.
 upstream_timeout_ms = 2000
@@ -69,6 +69,8 @@ max_entries = 4096
 max_memory_bytes = 8388608
 max_ttl_secs = 86400
 ```
+
+Le fichier fourni écoute uniquement sur `127.0.0.1:1053`. Pour servir le LAN sans Docker, choisir explicitement une adresse LAN ou `0.0.0.0:1053` et autoriser le port UDP/TCP dans le pare-feu.
 
 Le fichier `config.toml` est lu depuis le répertoire de travail, ou sélectionné avec `--config CHEMIN`. Les chemins relatifs des listes restent relatifs au répertoire de travail. Les sections `[dns]` et `[rewrites]`, ainsi que `listen` et `upstreams`, sont obligatoires ; `[rewrites]` peut être vide. Les champs inconnus sont refusés.
 
@@ -131,6 +133,8 @@ Compose publie le DNS sur `127.0.0.1:53` en UDP et TCP par défaut. Pour servir 
 
 Voir le [déploiement Docker](docs/docker.md) pour les ports, les montages, les tests et ARM64.
 
+La CI utilise Forgejo Actions et son registre de conteneurs pour les images. Elle vérifie les pushs et pull requests ; la construction et la publication AMD64 sont déclenchées manuellement. `LIGHT_DNS_IMAGE` permet à Compose d’utiliser l’image publiée. Voir la [configuration Forgejo](docs/docker.md#forgejo-et-registre-dimages).
+
 ## Développement
 
 Nécessite une installation de Rust et Cargo.
@@ -157,11 +161,11 @@ Vérifications :
 ```bash
 cargo fmt --all -- --check
 cargo clippy --all-targets -- -D warnings
-cargo test
-cargo check
+cargo test --locked
+cargo check --locked
 ```
 
-Les tests Docker et le benchmark sont ignorés par défaut ; leurs commandes d'exécution figurent dans la documentation dédiée.
+Les tests Docker et les benchmarks sont ignorés par défaut ; leurs commandes d'exécution figurent dans la documentation dédiée.
 
 ## Organisation du code
 
@@ -222,4 +226,4 @@ cargo test --test integration dns::server
 
 ## Licence
 
-Ce projet est distribué sous licence [MIT](https://opensource.org/licenses/MIT).
+Ce projet est distribué sous licence [MIT](LICENSE).

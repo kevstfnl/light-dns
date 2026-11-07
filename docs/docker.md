@@ -40,14 +40,49 @@ La CLI utilise la socket locale du conteneur ; aucun port supplémentaire ni mon
 
 Un reload réussi applique le TOML sans fermer les connexions DNS et remplace le cache. Un changement d'écoute nécessite un redémarrage ; pour conserver les publications Compose, garder le port interne 1053. Docker envoie `SIGTERM`, avec 10 secondes de grâce côté Compose et 5 secondes d'attente côté application. `docker compose stop` conserve le cache disque des filtres.
 
+## Forgejo et registre d’images
+
+La CI utilise Forgejo Actions dans `.forgejo/workflows/ci.yml`. Elle exécute les quatre commandes Rust sur les pushs et pull requests, sans secrets de registre ni benchmarks. Les téléchargements de dépendances sont nécessaires au premier build ; les tests fonctionnels utilisent seulement le réseau local.
+
+Activer Actions dans le dépôt Forgejo et enregistrer les runners correspondants. La configuration vise une version récente de Forgejo Actions ; son exécution reste à valider sur l’instance cible. Les runners sont sélectionnés par les variables de dépôt suivantes :
+
+| Variable | Défaut | Prérequis |
+| --- | --- | --- |
+| `FORGEJO_CI_RUNNER` | `ubuntu-latest` | Environnement Linux AMD64 avec Git, Bash, Node.js 24 pour checkout, rustup, compilateur C, make, CMake et certificats CA |
+| `FORGEJO_DOCKER_RUNNER` | `docker-amd64` | Environnement Linux AMD64 avec Git, Bash, Node.js 24, client Docker et accès à un moteur Docker Linux AMD64 |
+
+Ces labels doivent exister sur le runner ; ils ne provisionnent pas une machine Ubuntu. L’image minimale Node.js d’un runner Forgejo n’inclut pas forcément les outils Rust ci-dessus. Les actions checkout et cache sont référencées par des URL complètes, indépendamment de la forge configurée par défaut pour les actions. Le cache Cargo utilise le service de cache du runner, qui doit être activé. Les différences d’environnement sont détaillées dans la [documentation Forgejo Actions](https://forgejo.org/docs/latest/user/actions/github-actions/).
+
+Configurer l’accès Docker du runner de publication selon la [documentation Forgejo](https://forgejo.org/docs/latest/admin/actions/docker-access/). Utiliser un environnement de build dédié, distinct du moteur hébergeant Forgejo et les services de production ; les tests de PR n’ont pas besoin d’un accès Docker.
+
+La construction et la publication s’effectuent uniquement par lancement manuel du workflow depuis l’onglet Actions, avec le champ `image_tag` (par exemple `0.1.0`, ou `latest`). Choisir une révision de confiance. Les vérifications Rust doivent réussir avant la construction AMD64 et un test CLI `--help` sans réseau. Ce test rapide ne remplace pas la validation Docker fonctionnelle décrite plus bas. Aucune construction ARM64 n’est effectuée.
+
+Pour la publication, ajouter aux paramètres Actions du dépôt :
+
+- La variable `FORGEJO_REGISTRY_USER` : compte autorisé à publier dans l’espace du propriétaire du dépôt.
+- Le secret `FORGEJO_REGISTRY_TOKEN` : jeton de ce compte, limité à l’écriture des packages dans l’espace concerné. Il n’est utilisé que lors de la publication manuelle ; les contrôles Rust ne l’utilisent pas.
+
+Le workflow déduit l’image sous la forme `<hôte-forgejo>/<propriétaire>/<dépôt>:<image_tag>`, avec le nom en minuscules, et ajoute les labels OCI source/révision/licence. Un tag déjà présent peut être remplacé : réserver les versions publiées et utiliser `latest` seulement pour le suivi volontaire de la dernière image. L’authentification Docker passe par l’entrée standard et un répertoire de configuration temporaire supprimé à la fin de l’étape. Le nommage et l’authentification suivent le [registre de conteneurs Forgejo](https://forgejo.org/docs/latest/user/packages/container/).
+
+Pour déployer une image publiée, conserver le dossier `docker/` et le fichier Compose, puis adapter l’adresse suivante :
+
+```bash
+export LIGHT_DNS_IMAGE=forgejo.example.com/proprietaire/light-dns:0.1.0
+# Si le package est privé : docker login forgejo.example.com
+docker compose pull
+docker compose up -d --no-build
+```
+
+Sans `LIGHT_DNS_IMAGE`, le build local et le tag `light-dns:local` restent les défauts. Les montages TOML en lecture seule, le volume des listes, le healthcheck et la publication sur loopback sont identiques dans les deux cas. Pour un registre privé, le compte de déploiement a seulement besoin de lire les packages.
+
 ## Tests locaux
 
 ```bash
-docker build --tag light-dns:validation .
+docker build --platform linux/amd64 --tag light-dns:validation .
 cargo test --test integration deployment::docker -- --ignored --nocapture
 ```
 
-Ce test explicite nécessite l'accès au moteur Docker et l'image construite. Il crée son propre conteneur et son volume temporaire, sans utiliser le déploiement Compose existant. Il vérifie l'utilisateur non privilégié, les montages, les réponses DNS sur les ports UDP/TCP publiés, la CLI, le rejet d'un reload invalide, une sauvegarde TOML atomique, la conservation d'une connexion TCP et l'arrêt par `SIGTERM` avec un code nul. Il utilise uniquement des réponses locales, sans upstream Internet, et nettoie ses ressources temporaires. Il reste ignoré par `cargo test` normal.
+Ce test explicite nécessite l'accès au moteur Docker et l'image construite. Il crée son propre conteneur et son volume temporaire, sans utiliser le déploiement Compose existant. Il vérifie l'utilisateur non privilégié, les montages, les réponses DNS sur les ports UDP/TCP publiés, la CLI, le rejet d'un reload invalide, une sauvegarde TOML atomique, la conservation d'une connexion TCP et l'arrêt par `SIGTERM` avec un code nul. Il vérifie aussi le healthcheck `stats` et un cache distant préchargé dans le volume, retrouvé après redémarrage hors ligne. Les tests HTTP locaux couvrent séparément le téléchargement et la sauvegarde. Il utilise uniquement des réponses locales, sans upstream Internet, et nettoie ses ressources temporaires. Il reste ignoré par `cargo test` normal. `LIGHT_DNS_TEST_IMAGE` permet de choisir un tag de validation dédié sans remplacer une image existante ; le test vérifie et impose Linux AMD64.
 
 La construction et ce test ont réussi sur Linux AMD64 le 7 novembre 2026. `docker compose config --quiet` a également validé le fichier Compose fourni.
 
@@ -59,11 +94,4 @@ Les images de base [Rust](https://hub.docker.com/_/rust/) et [Debian](https://hu
 docker compose up -d --build
 ```
 
-Pour une construction ARM64 depuis une autre machine, un builder disposant déjà d'un worker ARM64 ou de l'émulation correspondante peut utiliser :
-
-```bash
-docker buildx build --platform linux/arm64 --load --tag light-dns:validation .
-cargo test --test integration deployment::docker -- --ignored --nocapture
-```
-
-Le test d'exécution exige lui aussi un hôte ou une émulation ARM64. Le builder de cette session ne propose que les plateformes AMD64 ; aucune émulation n'a été installée et la validation Raspberry Pi reste ouverte dans le TODO. Ne pas confondre la disponibilité des bases multiarchitectures avec un test réussi du service en ARM64.
+La validation ARM64/Raspberry Pi est réservée au mainteneur et reste ouverte dans le TODO. Le test Docker automatisé ci-dessus cible explicitement AMD64 ; il n’a pas été exécuté en ARM64. Ne pas confondre la disponibilité des bases multiarchitectures avec une validation du service sur cette architecture.
