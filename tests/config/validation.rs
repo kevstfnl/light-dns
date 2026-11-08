@@ -4,6 +4,19 @@ use light_dns::config::{Config, ConfigError};
 use std::time::Duration;
 
 #[test]
+fn alpine_release_config_uses_local_port_53_and_persistent_filters() -> Result<(), ConfigError> {
+    let config = Config::from_toml(include_str!("../../packaging/alpine/config.toml"))?;
+    assert_eq!(config.dns.listen.to_string(), "127.0.0.1:53");
+    assert_eq!(config.dns.upstreams.len(), 2);
+    assert!(config.rewrites.is_empty());
+    assert_eq!(
+        config.filtering.cache_dir.to_string_lossy(),
+        "/var/lib/light-dns/filters"
+    );
+    Ok(())
+}
+
+#[test]
 fn accepts_unspecified_listeners_and_empty_rewrites() -> Result<(), ConfigError> {
     for listen in ["0.0.0.0:1053", "[::]:1053"] {
         let config = Config::from_toml(&document(listen, &["127.0.0.1:53"], &[]))?;

@@ -51,6 +51,14 @@ Sauvegarder ses modifications locales avant la mise à jour et résoudre tout co
 
 ## Installation native Linux
 
+### Binaire précompilé pour Alpine sur Raspberry Pi 5
+
+Une archive **Alpine aarch64 (musl statique)** est préparée par GitHub Actions pour chaque tag `vX.Y.Z`, dans une release brouillon à valider sur le Pi avant publication. Elle contient le binaire, un installateur et un service OpenRC ; aucun compilateur ni Docker n'est nécessaire sur le Pi.
+
+Suivre le [guide Alpine](docs/alpine.md) pour télécharger une release publiée, vérifier SHA-256, installer et démarrer le service. L'installation conserve le TOML existant, écoute par défaut sur `127.0.0.1:53` et laisse l'activation/démarrage à l'administrateur.
+
+### Compilation depuis les sources
+
 Prérequis : Git, Rust/Cargo (la CI utilise Rust **1.99.1**), un compilateur C, make, CMake et les certificats CA du système.
 
 ```bash
@@ -73,7 +81,7 @@ sudo setcap 'cap_net_bind_service=+ep' /usr/local/bin/light-dns
 
 Cette capacité doit être réappliquée après remplacement du binaire. Exécuter le service avec un utilisateur dédié ou son utilisateur habituel, sans root. Le dossier de la socket doit appartenir à cet utilisateur ou à root, être accessible en écriture au service et ne pas être modifiable par le groupe ou les autres ; ses ancêtres doivent rester sous contrôle. Le cache des listes doit également être accessible en écriture.
 
-Le serveur reste au premier plan : `Ctrl+C`, `SIGINT` ou `SIGTERM` l’arrête proprement. Aucun service systemd/OpenRC n’est fourni. Pour mettre à jour : arrêter, récupérer le code, recompiler avec le lockfile, réinstaller le binaire puis relancer la même commande.
+Le serveur reste au premier plan : `Ctrl+C`, `SIGINT` ou `SIGTERM` l’arrête proprement. Un service OpenRC est fourni dans l’archive Alpine ; aucun service systemd n’est fourni. Pour mettre à jour une installation depuis les sources : arrêter, récupérer le code, recompiler avec le lockfile, réinstaller le binaire puis relancer la même commande.
 
 ## Configuration minimale
 

@@ -1,0 +1,11 @@
+# Écoute locale par défaut. Pour le LAN, choisir l'IP de cet hôte.
+# Un changement d'écoute exige un redémarrage ; sinon utiliser reload.
+[dns]
+listen = "127.0.0.1:53"
+upstreams = ["1.1.1.1:53", "9.9.9.9:53"]
+
+[rewrites]
+
+[filtering]
+enabled = true
+cache_dir = "/var/lib/light-dns/filters"

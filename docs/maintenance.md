@@ -6,13 +6,13 @@ Lire les [règles de contribution](../AGENTS.md). Conserver les fixtures réseau
 
 ```bash
 cargo fmt --all -- --check
-cargo clippy --all-targets -- -D warnings
+cargo clippy --locked --all-targets -- -D warnings
 cargo test --locked
 cargo check --locked
 cargo build --release --locked
 ```
 
-Les tests de configuration valident les deux TOML fournis et le petit exemple du README. Les tests réseau exigent des sockets UDP/TCP loopback, IPv6 et Unix autorisées. `EPERM` est un échec d’environnement, pas une validation ; ne pas l’ignorer ni contourner les restrictions.
+Les tests de configuration valident les TOML natif, Docker et Alpine, ainsi que le petit exemple du README. Les tests réseau exigent des sockets UDP/TCP loopback, IPv6 et Unix autorisées. `EPERM` est un échec d’environnement, pas une validation ; ne pas l’ignorer ni contourner les restrictions.
 
 Test explicite du conteneur, sur Linux AMD64 uniquement :
 
@@ -76,10 +76,34 @@ Conserver une optimisation seulement si le gain dépasse la dispersion des réf�
 
 ## Forgejo
 
-Seul `.forgejo/workflows/ci.yml` assure la CI. Le runner `FORGEJO_CI_RUNNER` (défaut `ubuntu-latest`) doit être Linux AMD64 avec Git, Bash, Node.js 24, rustup, compilateur C, make, CMake et CA ; le label ne provisionne pas cet environnement. Activer le service de cache du runner si utilisé.
+`.forgejo/workflows/ci.yml` conserve la CI et la publication Docker Forgejo. Le runner `FORGEJO_CI_RUNNER` (défaut `ubuntu-latest`) doit être Linux AMD64 avec Git, Bash, Node.js 24, rustup, compilateur C, make, CMake et CA ; le label ne provisionne pas cet environnement. Activer le service de cache du runner si utilisé.
 
 La publication reste manuelle, sur une révision de confiance, avec `image_tag`. Le runner `FORGEJO_DOCKER_RUNNER` (défaut `docker-amd64`) exige Docker Linux AMD64 ; utiliser un moteur dédié. Configurer `FORGEJO_REGISTRY_USER` et le secret `FORGEJO_REGISTRY_TOKEN` limité à l’écriture des packages. Les PR n’ont pas besoin de ces secrets ni du moteur Docker.
 
-L’image publiée est `<hôte-forgejo>/<propriétaire>/<dépôt>:<image_tag>` en minuscules ; un tag peut être remplacé. Pour la déployer, définir `LIGHT_DNS_IMAGE` dans `.env`, s’authentifier si nécessaire avec un compte de lecture, puis `docker compose pull` et `docker compose up -d --no-build`. Aucun workflow GitHub Actions n’est fourni.
+L’image publiée est `<hôte-forgejo>/<propriétaire>/<dépôt>:<image_tag>` en minuscules ; un tag peut être remplacé. Pour la déployer, définir `LIGHT_DNS_IMAGE` dans `.env`, s’authentifier si nécessaire avec un compte de lecture, puis `docker compose pull` et `docker compose up -d --no-build`.
+
+## Releases GitHub Alpine ARM64
+
+`.github/workflows/release.yml` vérifie le projet sur Linux AMD64, compile vers `aarch64-unknown-linux-musl`, inspecte l'ELF sans l'exécuter et conserve l'archive en artefact. Les PR et les pushes sur `main` ne créent aucune release. Un push de tag `vX.Y.Z` correspondant à la version Cargo crée un brouillon ; `workflow_dispatch` permet de reconstruire un tag existant. Une release publiée n'est jamais remplacée par ce workflow.
+
+Les actions sont figées par SHA. Les outils de compilation sont Rust 1.99.1, cargo-zigbuild 0.23.4, Zig 0.15.2 et CMake 4.4.5 ; les archives des trois derniers sont vérifiées par SHA-256. Le jeton GitHub intégré suffit : seul le job de brouillon a `contents: write`.
+
+Reproduction depuis Linux AMD64 avec rustup, Python 3.11+, Git, curl, tar, xz, binutils et les outils C/make :
+
+```sh
+rustup toolchain install 1.99.1 --profile minimal --target aarch64-unknown-linux-musl
+sh scripts/setup-release-tools.sh "$PWD/target/release-tools"
+export PATH="$PWD/target/release-tools/cargo-zigbuild:$PWD/target/release-tools/zig:$PWD/target/release-tools/cmake/bin:$PATH"
+RUSTUP_TOOLCHAIN=1.99.1 RUSTFLAGS=-Dwarnings cargo zigbuild --release --locked --target aarch64-unknown-linux-musl
+sh scripts/package-release.sh v0.1.0
+python3 -m unittest discover -s tests/packaging -v
+shellcheck packaging/alpine/install.sh scripts/setup-release-tools.sh scripts/package-release.sh
+sh -n packaging/alpine/light-dns.initd
+actionlint .github/workflows/release.yml
+```
+
+Mettre à jour la version Cargo et le lockfile ensemble avant un nouveau tag. Committer les fichiers validés avant l'empaquetage : `REVISION` identifie le commit HEAD. L'archive et `SHA256SUMS` sont produits dans `target/release-assets/`. Pour publier la première version, pousser le commit validé puis le tag `v0.1.0`, examiner le workflow et télécharger le brouillon avec `gh release download` (voir [installation et validation sur Pi](alpine.md)). Publier manuellement seulement après validation matérielle ; cette étape ne doit pas être déduite d'une compilation réussie.
+
+Avec cette chaîne, Zig peut signaler `ignoring deprecated linker optimization setting '1'` à l'édition de liens. La compilation réussit et l'ELF est inspecté ; cet avertissement de l'outil reste visible et n'est pas une validation d'exécution ARM64. Clippy doit toujours rester sans avertissement.
 
 ARM64, Alpine et Raspberry Pi restent une validation manuelle du mainteneur, avant remplacement d’AdGuard Home. Aucune mesure AMD64 ni fixture locale ne la remplace.
