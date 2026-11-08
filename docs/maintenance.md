@@ -86,7 +86,7 @@ L’image publiée est `<hôte-forgejo>/<propriétaire>/<dépôt>:<image_tag>` e
 
 `.github/workflows/release.yml` vérifie le projet sur Linux AMD64, compile vers `aarch64-unknown-linux-musl`, inspecte l'ELF sans l'exécuter et conserve l'archive en artefact. Les PR et les pushes sur `main` ne créent aucune release. Un push de tag `vX.Y.Z` correspondant à la version Cargo crée un brouillon ; `workflow_dispatch` permet de reconstruire un tag existant. Une release publiée n'est jamais remplacée par ce workflow.
 
-Les actions sont figées par SHA. Les outils de compilation sont Rust 1.99.1, cargo-zigbuild 0.23.4, Zig 0.15.2 et CMake 4.4.5 ; les archives des trois derniers sont vérifiées par SHA-256. Le jeton GitHub intégré suffit : seul le job de brouillon a `contents: write`.
+Les actions sont figées par SHA. Les outils de compilation sont Rust 1.99.1, cargo-zigbuild 0.23.4, Zig 0.15.2 et CMake 4.4.5 ; les archives des trois derniers sont vérifiées par SHA-256. ShellCheck 0.11.0 est également figé et vérifié par SHA-256, afin d'utiliser la même version en local et en CI. Le jeton GitHub intégré suffit : seul le job de brouillon a `contents: write`.
 
 Reproduction depuis Linux AMD64 avec rustup, Python 3.11+, Git, curl, tar, xz, binutils et les outils C/make :
 
