@@ -165,6 +165,7 @@ async fn measure(
     trial: usize,
     binary: &Path,
     ticks: f64,
+    timeout_ms: u64,
 ) -> TestResult<(String, bool)> {
     let directory = TestDirectory::new()?;
     let listener = TcpListener::bind("127.0.0.1:0").await?;
@@ -226,7 +227,7 @@ async fn measure(
         format!("['{upstream}']")
     };
     let config = format!(
-        "[dns]\nlisten = '127.0.0.1:0'\nupstreams = {upstreams}\nupstream_timeout_ms = 100\n[rewrites]\n[cache]\nenabled = false\n[filtering]\nenabled = false\n"
+        "[dns]\nlisten = '127.0.0.1:0'\nupstreams = {upstreams}\nupstream_timeout_ms = {timeout_ms}\n[rewrites]\n[cache]\nenabled = false\n[filtering]\nenabled = false\n"
     );
     // Config validation requires a nonzero port; reserve an ephemeral candidate, then let
     // the child bind it. A race is reported as startup failure, never silently ignored.
@@ -308,7 +309,7 @@ async fn measure(
         cpu_ms * 1000.0 / samples as f64
     };
     let row = format!(
-        "{scenario:?},{concurrency},{trial},{samples},{errors_total},{warmup_total},{seconds:.3},{:.2},{:.2},{:.2},{:.2},{cpu_ms:.1},{:.3},{},{peak},{},{},{},{},{},{cold_failover_us:.2}\n",
+        "{scenario:?},{concurrency},{trial},{timeout_ms},{samples},{errors_total},{warmup_total},{seconds:.3},{:.2},{:.2},{:.2},{:.2},{cpu_ms:.1},{:.3},{},{peak},{},{},{},{},{},{cold_failover_us:.2}\n",
         samples as f64 / seconds,
         percentile(&latencies, 50),
         percentile(&latencies, 95),
@@ -359,12 +360,18 @@ async fn dns_forwarding() -> TestResult {
         Err(error) => return Err(error.into()),
     };
     let mut csv = String::from(
-        "variant,scenario,concurrency,trial,samples,errors,warmup_errors,seconds,qps,p50_us,p95_us,p99_us,cpu_ms,cpu_us_per_query,rss_before_kib,rss_peak_kib,tcp_connections,process_hwm_kib,timeouts,invalid,transport_errors,cold_failover_us\n",
+        "variant,scenario,concurrency,trial,timeout_ms,samples,errors,warmup_errors,seconds,qps,p50_us,p95_us,p99_us,cpu_ms,cpu_us_per_query,rss_before_kib,rss_peak_kib,tcp_connections,process_hwm_kib,timeouts,invalid,transport_errors,cold_failover_us\n",
     );
     fs::write(&output, &csv)?;
     let error_file = output.with_extension("error.txt");
     if error_file.exists() {
         fs::remove_file(&error_file)?;
+    }
+    let timeout_ms = std::env::var("LIGHT_DNS_BENCH_TIMEOUT_MS")
+        .unwrap_or_else(|_| "100".into())
+        .parse::<u64>()?;
+    if !(1..=60_000).contains(&timeout_ms) {
+        return Err(io::Error::other("timeout attendu : 1 à 60000 ms").into());
     }
     let mut failed = false;
     for trial in 1..=5 {
@@ -389,6 +396,7 @@ async fn dns_forwarding() -> TestResult {
                         trial,
                         binary,
                         ticks,
+                        timeout_ms,
                     )
                     .await
                     {

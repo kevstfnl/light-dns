@@ -337,3 +337,7 @@ fn decision(action: Option<Action>) -> Decision {
         None => Decision::Pass,
     }
 }
+
+#[cfg(all(test, target_os = "linux"))]
+#[path = "../../tests/performance/filter_offline.rs"]
+mod offline;

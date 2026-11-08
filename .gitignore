@@ -1,3 +1,4 @@
 /target
 /data/filters/
 /light-dns.sock
+/.env

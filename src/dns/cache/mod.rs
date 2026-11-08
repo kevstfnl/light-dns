@@ -175,3 +175,7 @@ impl ResponseCache {
         }
     }
 }
+
+#[cfg(all(test, target_os = "linux"))]
+#[path = "../../../tests/performance/cache_offline.rs"]
+mod offline;

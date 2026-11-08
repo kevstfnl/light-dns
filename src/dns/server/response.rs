@@ -97,3 +97,7 @@ pub(super) fn error_response(request: &Request, code: ResponseCode) -> Message {
     response.metadata.response_code = code;
     response
 }
+
+#[cfg(all(test, target_os = "linux"))]
+#[path = "../../../tests/performance/response_offline.rs"]
+mod offline;

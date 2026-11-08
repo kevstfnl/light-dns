@@ -1,7 +1,7 @@
 use super::measurement::{Failures, Usage, percentile, ticks_per_second};
 use crate::support::{TestResult, dns::*, process::TestDirectory};
 use hickory_proto::{
-    op::{Message, ResponseCode},
+    op::{Edns, Message, ResponseCode},
     rr::{Name, RData, Record, RecordType, rdata::CNAME},
 };
 use std::{
@@ -12,7 +12,7 @@ use std::{
     time::{Duration, Instant},
 };
 use tokio::{
-    net::{TcpListener, UdpSocket},
+    net::{TcpListener, TcpStream, UdpSocket},
     time::{sleep, timeout},
 };
 
@@ -38,11 +38,44 @@ fn response(request: &Message) -> Message {
             ),
         );
     }
+    let name = request.queries[0].name().to_ascii();
+    if request.queries[0].query_type() == RecordType::AAAA {
+        response.answers[0].data = RData::AAAA(hickory_proto::rr::rdata::AAAA(
+            "2001:db8::1".parse().unwrap(),
+        ));
+    }
+    if name.starts_with("edns-negative") {
+        response.answers.clear();
+        response.metadata.response_code = ResponseCode::NXDomain;
+        response.authorities.push(Record::from_rdata(
+            Name::from_ascii("example.").unwrap(),
+            60,
+            RData::SOA(hickory_proto::rr::rdata::SOA::new(
+                Name::from_ascii("ns.example.").unwrap(),
+                Name::from_ascii("hostmaster.example.").unwrap(),
+                1,
+                60,
+                60,
+                60,
+                60,
+            )),
+        ));
+    }
+    if name.starts_with("edns-near") {
+        response.answers = vec![response.answers[0].clone(); 29];
+    }
+    if name.starts_with("edns-large") {
+        response.answers = vec![response.answers[0].clone(); 100];
+    }
     response
 }
 
+#[derive(Clone)]
 struct Case {
     name: &'static str,
+    tcp: bool,
+    payload: Option<u16>,
+    truncated: bool,
     query: &'static str,
     advanced: bool,
     cached: bool,
@@ -50,7 +83,13 @@ struct Case {
     code: ResponseCode,
 }
 
-async fn measure(binary: &Path, case: &Case, base: &str, ticks: f64) -> TestResult<(String, bool)> {
+async fn measure(
+    binary: &Path,
+    case: &Case,
+    base: &str,
+    ticks: f64,
+    concurrency: usize,
+) -> TestResult<(String, bool)> {
     let directory = TestDirectory::new()?;
     let upstream = Upstream::start(response, response).await?;
     let reserve = UdpSocket::bind("127.0.0.1:0").await?;
@@ -108,41 +147,75 @@ async fn measure(binary: &Path, case: &Case, base: &str, ticks: f64) -> TestResu
         }
         sleep(Duration::from_millis(10)).await;
     }
-    let client = UdpSocket::bind("127.0.0.1:0").await?;
-    client.connect(address).await?;
     let mut request = query(case.query)?;
     request.queries[0].query_type = case.kind;
-    let mut buffer = [0; 4096];
-    for index in 0..100 {
-        exchange(&client, &request, &mut buffer, case)
-            .await
-            .map_err(|error| {
-                io::Error::other(format!(
-                    "échauffement interrompu après {index} succès, 1 erreur : {error}"
-                ))
-            })?;
+    request.edns = case.payload.map(|size| {
+        let mut edns = Edns::new();
+        edns.set_max_payload(size);
+        edns
+    });
+    let mut clients = Vec::new();
+    for _ in 0..concurrency {
+        let mut client = if case.tcp {
+            Client::Tcp(TcpStream::connect(address).await?)
+        } else {
+            let socket = UdpSocket::bind("127.0.0.1:0").await?;
+            socket.connect(address).await?;
+            Client::Udp(socket)
+        };
+        let mut buffer = [0; 4096];
+        for index in 0..100 {
+            exchange(&mut client, &request, &mut buffer, case)
+                .await
+                .map_err(|error| {
+                    io::Error::other(format!(
+                        "échauffement interrompu après {index} succès : {error}"
+                    ))
+                })?;
+        }
+        clients.push(client);
     }
-    let before = Usage::read_process(&daemon.0.id().to_string())?;
-    let mut latencies = Vec::with_capacity(50_000);
-    let mut failures = Failures::default();
-    let start = Instant::now();
-    let mut consecutive_errors = 0;
-    for id in 0..50_000 {
-        request.metadata.id = id as u16;
-        let begin = Instant::now();
-        match exchange(&client, &request, &mut buffer, case).await {
-            Ok(()) => {
-                latencies.push(begin.elapsed().as_secs_f64() * 1e6);
-                consecutive_errors = 0;
-            }
-            Err(error) => {
-                failures.record(error.as_ref())?;
-                consecutive_errors += 1;
-                if consecutive_errors == 16 {
-                    break;
+    let barrier = std::sync::Arc::new(tokio::sync::Barrier::new(concurrency + 1));
+    let mut tasks = tokio::task::JoinSet::new();
+    for (client_index, mut client) in clients.into_iter().enumerate() {
+        let case = case.clone();
+        let mut request = request.clone();
+        let barrier = barrier.clone();
+        tasks.spawn(async move {
+            let mut latencies = Vec::new();
+            let mut failures = Failures::default();
+            let mut buffer = [0; 4096];
+            let mut consecutive_errors = 0;
+            barrier.wait().await;
+            for id in (client_index..50_000).step_by(concurrency) {
+                request.metadata.id = id as u16;
+                let begin = Instant::now();
+                match exchange(&mut client, &request, &mut buffer, &case).await {
+                    Ok(()) => {
+                        latencies.push(begin.elapsed().as_secs_f64() * 1e6);
+                        consecutive_errors = 0;
+                    }
+                    Err(error) => {
+                        failures.record(error.as_ref())?;
+                        consecutive_errors += 1;
+                        if consecutive_errors == 16 {
+                            break;
+                        }
+                    }
                 }
             }
-        }
+            TestResult::Ok((latencies, failures))
+        });
+    }
+    let before = Usage::read_process(&daemon.0.id().to_string())?;
+    let start = Instant::now();
+    barrier.wait().await;
+    let mut latencies = Vec::with_capacity(50_000);
+    let mut failures = Failures::default();
+    while let Some(result) = tasks.join_next().await {
+        let (samples, errors) = result??;
+        latencies.extend(samples);
+        failures.add(errors);
     }
     let seconds = start.elapsed().as_secs_f64();
     let after = Usage::read_process(&daemon.0.id().to_string())?;
@@ -151,7 +224,7 @@ async fn measure(binary: &Path, case: &Case, base: &str, ticks: f64) -> TestResu
     let samples = latencies.len();
     Ok((
         format!(
-            "{},{samples},{},{},{},{},{seconds:.3},{:.2},{:.2},{:.2},{:.2},{cpu_ms:.1},{:.3},{},{},{}",
+            "{},{concurrency},{samples},{},{},{},{},{seconds:.3},{:.2},{:.2},{:.2},{:.2},{cpu_ms:.1},{:.3},{},{},{}",
             case.name,
             failures.total(),
             failures.timeouts,
@@ -174,16 +247,29 @@ async fn measure(binary: &Path, case: &Case, base: &str, ticks: f64) -> TestResu
     ))
 }
 
+enum Client {
+    Udp(UdpSocket),
+    Tcp(TcpStream),
+}
+
 async fn exchange(
-    socket: &UdpSocket,
+    client: &mut Client,
     request: &Message,
     buffer: &mut [u8],
     case: &Case,
 ) -> TestResult {
-    socket.send(&request.to_vec()?).await?;
-    let length = timeout(Duration::from_secs(3), socket.recv(buffer)).await??;
-    let response = Message::from_vec(&buffer[..length])?;
-    let expected = if case.code != ResponseCode::NoError {
+    let (response, length) = match client {
+        Client::Udp(socket) => {
+            socket.send(&request.to_vec()?).await?;
+            let length = timeout(Duration::from_secs(3), socket.recv(buffer)).await??;
+            (Message::from_vec(&buffer[..length])?, length)
+        }
+        Client::Tcp(stream) => {
+            write_tcp(stream, request).await?;
+            (timeout(Duration::from_secs(3), read_tcp(stream)).await??, 0)
+        }
+    };
+    let expected = if case.code != ResponseCode::NoError || case.truncated {
         Vec::new()
     } else if matches!(
         case.name,
@@ -197,7 +283,12 @@ async fn exchange(
     } else {
         self::response(request).answers
     };
-    if response.id != request.id
+    let expected_edns = case.payload.map(|size| size.clamp(512, 1232));
+    if response.truncation != case.truncated
+        || response.edns.as_ref().map(Edns::max_payload) != expected_edns
+        || (!case.tcp && length > usize::from(expected_edns.unwrap_or(512)))
+        || response.authorities != self::response(request).authorities
+        || response.id != request.id
         || response.queries != request.queries
         || response.response_code != case.code
         || response.answers.len() != expected.len()
@@ -239,6 +330,9 @@ async fn dns_filtering() -> TestResult {
     let ticks = ticks_per_second()?;
     let cases = [
         Case {
+            tcp: false,
+            payload: None,
+            truncated: false,
             name: "local_exact",
             query: "local.example.",
             advanced: false,
@@ -247,6 +341,9 @@ async fn dns_filtering() -> TestResult {
             code: ResponseCode::NoError,
         },
         Case {
+            tcp: false,
+            payload: None,
+            truncated: false,
             name: "local_wildcard",
             query: "deep.host.home.arpa.",
             advanced: false,
@@ -255,6 +352,9 @@ async fn dns_filtering() -> TestResult {
             code: ResponseCode::NoError,
         },
         Case {
+            tcp: false,
+            payload: None,
+            truncated: false,
             name: "user_allowlist",
             query: "safe.block50000.example.",
             advanced: false,
@@ -263,6 +363,9 @@ async fn dns_filtering() -> TestResult {
             code: ResponseCode::NoError,
         },
         Case {
+            tcp: false,
+            payload: None,
+            truncated: false,
             name: "simple_miss",
             query: "clean.example.",
             advanced: false,
@@ -271,6 +374,9 @@ async fn dns_filtering() -> TestResult {
             code: ResponseCode::NoError,
         },
         Case {
+            tcp: false,
+            payload: None,
+            truncated: false,
             name: "simple_hit",
             query: "block50000.example.",
             advanced: false,
@@ -279,6 +385,9 @@ async fn dns_filtering() -> TestResult {
             code: ResponseCode::NXDomain,
         },
         Case {
+            tcp: false,
+            payload: None,
+            truncated: false,
             name: "warm_cache",
             query: "clean.example.",
             advanced: false,
@@ -287,6 +396,9 @@ async fn dns_filtering() -> TestResult {
             code: ResponseCode::NoError,
         },
         Case {
+            tcp: false,
+            payload: None,
+            truncated: false,
             name: "cname_cache",
             query: "alias.example.",
             advanced: false,
@@ -295,6 +407,9 @@ async fn dns_filtering() -> TestResult {
             code: ResponseCode::NoError,
         },
         Case {
+            tcp: false,
+            payload: None,
+            truncated: false,
             name: "advanced_miss",
             query: "clean.example.",
             advanced: true,
@@ -303,6 +418,9 @@ async fn dns_filtering() -> TestResult {
             code: ResponseCode::NoError,
         },
         Case {
+            tcp: false,
+            payload: None,
+            truncated: false,
             name: "advanced_hit",
             query: "ad500x.example.",
             advanced: true,
@@ -311,6 +429,9 @@ async fn dns_filtering() -> TestResult {
             code: ResponseCode::NXDomain,
         },
         Case {
+            tcp: false,
+            payload: None,
+            truncated: false,
             name: "advanced_rewrite",
             query: "rewrite.example.",
             advanced: true,
@@ -319,12 +440,92 @@ async fn dns_filtering() -> TestResult {
             code: ResponseCode::NoError,
         },
         Case {
+            tcp: false,
+            payload: None,
+            truncated: false,
             name: "cname_blocked",
             query: "alias.example.",
             advanced: false,
             cached: false,
             kind: RecordType::A,
             code: ResponseCode::NXDomain,
+        },
+        Case {
+            name: "edns_a",
+            query: "edns-a.example.",
+            kind: RecordType::A,
+            code: ResponseCode::NoError,
+            payload: Some(1232),
+            tcp: false,
+            cached: false,
+            truncated: false,
+            advanced: false,
+        },
+        Case {
+            name: "edns_aaaa",
+            query: "edns-aaaa.example.",
+            kind: RecordType::AAAA,
+            code: ResponseCode::NoError,
+            payload: Some(1232),
+            tcp: false,
+            cached: false,
+            truncated: false,
+            advanced: false,
+        },
+        Case {
+            name: "edns_negative",
+            query: "edns-negative.example.",
+            kind: RecordType::A,
+            code: ResponseCode::NXDomain,
+            payload: Some(1232),
+            tcp: false,
+            cached: false,
+            truncated: false,
+            advanced: false,
+        },
+        Case {
+            name: "edns_cache",
+            query: "edns-a.example.",
+            kind: RecordType::A,
+            code: ResponseCode::NoError,
+            payload: Some(1232),
+            tcp: false,
+            cached: true,
+            truncated: false,
+            advanced: false,
+        },
+        Case {
+            name: "edns_near",
+            query: "edns-near.example.",
+            kind: RecordType::A,
+            code: ResponseCode::NoError,
+            payload: Some(512),
+            tcp: false,
+            cached: false,
+            truncated: false,
+            advanced: false,
+        },
+        Case {
+            name: "edns_truncated",
+            query: "edns-large.example.",
+            kind: RecordType::A,
+            code: ResponseCode::NoError,
+            payload: Some(512),
+            tcp: false,
+            cached: false,
+            truncated: true,
+            advanced: false,
+        },
+        Case {
+            name: "edns_tcp",
+            query: "edns-large.example.",
+            kind: RecordType::A,
+            code: ResponseCode::NoError,
+            payload: Some(1232),
+            tcp: true,
+            cached: false,
+            truncated: false,
+            advanced: false,
         },
     ];
     let output = std::env::var_os("LIGHT_DNS_BENCH_CSV")
@@ -336,7 +537,7 @@ async fn dns_filtering() -> TestResult {
             .ok_or_else(|| io::Error::other("chemin CSV invalide"))?,
     )?;
     let mut csv = String::from(
-        "variant,trial,scenario,samples,errors,timeouts,invalid,transport_errors,seconds,qps,p50_us,p95_us,p99_us,cpu_ms,cpu_us_per_query,rss_before_kib,rss_after_kib,process_hwm_kib\n",
+        "variant,trial,scenario,concurrency,samples,errors,timeouts,invalid,transport_errors,seconds,qps,p50_us,p95_us,p99_us,cpu_ms,cpu_us_per_query,rss_before_kib,rss_after_kib,process_hwm_kib\n",
     );
     fs::write(&output, &csv)?;
     let error_file = output.with_extension("error.txt");
@@ -344,40 +545,44 @@ async fn dns_filtering() -> TestResult {
         fs::remove_file(error_file)?;
     }
     for trial in 1..=5 {
-        for case in &cases {
-            let mut variants = vec![("current", current.as_path())];
-            if let Some(before) = &before {
-                variants.push(("before", before.as_path()));
-            }
-            if trial % 2 == 0 {
-                variants.reverse();
-            }
-            for (variant, binary) in variants {
-                let (row, failed) = match measure(binary, case, &base, ticks).await {
-                    Ok(row) => row,
-                    Err(error) => {
+        for concurrency in super::measurement::concurrencies()? {
+            for case in &cases {
+                let mut variants = vec![("current", current.as_path())];
+                if let Some(before) = &before {
+                    variants.push(("before", before.as_path()));
+                }
+                if trial % 2 == 0 {
+                    variants.reverse();
+                }
+                for (variant, binary) in variants {
+                    let (row, failed) = match measure(binary, case, &base, ticks, concurrency).await
+                    {
+                        Ok(row) => row,
+                        Err(error) => {
+                            fs::write(
+                                output.with_extension("error.txt"),
+                                format!(
+                                    "INCOMPLETE variant={variant} scenario={} trial={trial}: {error}\n",
+                                    case.name
+                                ),
+                            )?;
+                            return Err(error);
+                        }
+                    };
+                    println!("{variant},{trial},{row}");
+                    writeln!(csv, "{variant},{trial},{row}")?;
+                    fs::write(&output, &csv)?;
+                    // Une ligne avec erreurs reste disponible, mais invalide la campagne.
+                    if failed {
                         fs::write(
                             output.with_extension("error.txt"),
-                            format!(
-                                "INCOMPLETE variant={variant} scenario={} trial={trial}: {error}\n",
-                                case.name
-                            ),
+                            format!("INCOMPLETE variant={variant} trial={trial}: {row}\n"),
                         )?;
-                        return Err(error);
+                        return Err(io::Error::other(
+                            "erreurs DNS pendant le benchmark ; voir CSV",
+                        )
+                        .into());
                     }
-                };
-                println!("{variant},{trial},{row}");
-                writeln!(csv, "{variant},{trial},{row}")?;
-                fs::write(&output, &csv)?;
-                // Une ligne avec erreurs reste disponible, mais invalide la campagne.
-                if failed {
-                    fs::write(
-                        output.with_extension("error.txt"),
-                        format!("INCOMPLETE variant={variant} trial={trial}: {row}\n"),
-                    )?;
-                    return Err(
-                        io::Error::other("erreurs DNS pendant le benchmark ; voir CSV").into(),
-                    );
                 }
             }
         }

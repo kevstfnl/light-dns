@@ -106,3 +106,15 @@ pub(super) fn ticks_per_second() -> TestResult<f64> {
     }
     Ok(ticks)
 }
+
+pub(super) fn concurrencies() -> TestResult<Vec<usize>> {
+    let value = std::env::var("LIGHT_DNS_BENCH_CONCURRENCY").unwrap_or_else(|_| "1,32,256".into());
+    let values = value
+        .split(',')
+        .map(str::parse::<usize>)
+        .collect::<Result<Vec<_>, _>>()?;
+    if values.is_empty() || values.iter().any(|value| ![1, 32, 256].contains(value)) {
+        return Err(io::Error::other("concurrence attendue : sous-ensemble de 1,32,256").into());
+    }
+    Ok(values)
+}

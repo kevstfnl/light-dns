@@ -108,3 +108,7 @@ impl Rewrites {
         None
     }
 }
+
+#[cfg(all(test, target_os = "linux"))]
+#[path = "../../tests/performance/rewrites_offline.rs"]
+mod offline;
