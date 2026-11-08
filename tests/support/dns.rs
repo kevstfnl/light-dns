@@ -74,9 +74,7 @@ impl Upstream {
         udp_response: fn(&Message) -> Message,
         tcp_response: fn(&Message) -> Message,
     ) -> TestResult<Self> {
-        let udp = UdpSocket::bind(listen).await?;
-        let address = udp.local_addr()?;
-        let tcp = TcpListener::bind(address).await?;
+        let (udp, tcp, address) = fixture_transports(listen.parse()?).await?;
         let hits = Arc::new(AtomicUsize::new(0));
         let udp_hits = hits.clone();
         let tcp_hits = hits.clone();
@@ -153,4 +151,22 @@ pub(crate) async fn write_tcp(stream: &mut TcpStream, message: &Message) -> Test
     stream.write_u16(bytes.len().try_into()?).await?;
     stream.write_all(&bytes).await?;
     Ok(())
+}
+
+pub(crate) async fn fixture_transports(
+    listen: SocketAddr,
+) -> TestResult<(UdpSocket, TcpListener, SocketAddr)> {
+    for attempt in 0..16 {
+        let tcp = TcpListener::bind(listen).await?;
+        let address = tcp.local_addr()?;
+        match UdpSocket::bind(address).await {
+            Ok(udp) => return Ok((udp, tcp, address)),
+            Err(error)
+                if listen.port() == 0
+                    && error.kind() == std::io::ErrorKind::AddrInUse
+                    && attempt < 15 => {}
+            Err(error) => return Err(error.into()),
+        }
+    }
+    Err(std::io::Error::other("aucun port fixture UDP/TCP commun").into())
 }

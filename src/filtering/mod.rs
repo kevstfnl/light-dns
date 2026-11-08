@@ -1,11 +1,12 @@
 mod download;
 mod index;
 mod parser;
+mod rewrite;
 mod updater;
 
 use crate::config::FilteringConfig;
 use arc_swap::ArcSwap;
-use index::FilterIndex;
+pub(crate) use index::{Decision, FilterIndex};
 use std::{io, sync::Arc};
 pub(crate) use updater::Updater;
 

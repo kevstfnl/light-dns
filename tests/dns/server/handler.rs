@@ -142,6 +142,13 @@ async fn saturation_does_not_start_more_upstream_requests() -> TestResult {
     })
     .await??;
 
+    // Le reload ne doit pas doubler le quota pendant que l'ancien état répond encore.
+    let mut replacement = test_config(vec![silent.local_addr()?])?;
+    replacement.dns.upstream_timeout = Duration::from_secs(30);
+    replacement
+        .rewrites
+        .insert(Name::from_ascii("local.lan.")?, "192.168.1.10".parse()?);
+    server.control().reload(replacement).await?;
     let (response, _) = udp(address, &query("overflow.test.")?).await?;
     assert_eq!(response.response_code, ResponseCode::ServFail);
     let (local, _) = udp(address, &query("local.lan.")?).await?;

@@ -9,9 +9,9 @@ Configuration simple, faible consommation de ressources et déploiement Docker.
 ## Fonctionnalités disponibles
 
 - Écoute UDP et TCP sur la même adresse, en IPv4 ou IPv6.
-- Forwarding vers les upstreams configurés, avec timeouts, bascule et repli TCP.
+- Forwarding vers les upstreams configurés, avec timeouts, bascule adaptative et repli TCP.
 - Rewrites exacts et wildcards, avec réponses A/AAAA locales prioritaires.
-- Filtrage de domaines avec listes classiques par défaut, exceptions et mises à jour automatiques.
+- Filtrage de domaines et CNAME, règles DNS AdGuard courantes, exceptions et mises à jour atomiques.
 - Cache des réponses upstream avec TTL décroissants, cache négatif SOA et budget mémoire configurable.
 - Configuration exclusivement TOML et erreurs de démarrage explicites.
 - Commandes CLI locales : purge du cache, rechargement TOML et statistiques.
@@ -23,11 +23,11 @@ Configuration simple, faible consommation de ressources et déploiement Docker.
 Le traitement des requêtes DNS suit cet ordre :
 
 1. Recherche d'une règle de réécriture DNS locale.
-2. Vérification des listes de blocage.
+2. Application des règles de filtrage et des réécritures de listes.
 3. Recherche d'une réponse dans le cache.
 4. Transmission aux serveurs DNS externes.
 
-Les rewrites sont consultés en premier, puis les filtres, sans accès réseau. Un domaine bloqué reçoit `NXDOMAIN`, sans enregistrement, quel que soit le type demandé. Les exceptions autorisent la poursuite du traitement. Après une absence dans le cache, les requêtes récursives sont transmises aux upstreams dans l'ordre configuré. Une erreur réseau, un timeout, une réponse invalide, `SERVFAIL` ou `REFUSED` déclenche l'essai suivant. Si tous échouent, le client reçoit `SERVFAIL`. Les réponses admissibles sont conservées en mémoire, avec diminution des TTL à chaque lecture et expiration sans prolongation.
+Les rewrites sont consultés en premier, puis les filtres, sans accès réseau. Un domaine bloqué reçoit `NXDOMAIN`, sans enregistrement, quel que soit le type demandé. Les exceptions autorisent la poursuite du traitement. Après une absence dans le cache, les requêtes récursives sont transmises aux upstreams dans l'ordre configuré. Une erreur réseau, un timeout, une réponse invalide, `SERVFAIL` ou `REFUSED` déclenche l'essai suivant. Les erreurs de transport écartent le serveur pendant 5 secondes pour le protocole concerné ; son retour est sondé en arrière-plan lorsque le trafic reprend. Les réponses `SERVFAIL`/`REFUSED` ne déclenchent pas cette mise à l'écart. Si tous échouent, le client reçoit `SERVFAIL`. Les réponses admissibles sont conservées en mémoire, avec diminution des TTL à chaque lecture et expiration sans prolongation.
 
 Les clients TCP utilisent un upstream TCP. Pour UDP, une réponse upstream tronquée déclenche un nouvel échange TCP. Les réponses UDP respectent 512 octets sans EDNS, ou la taille annoncée par le client plafonnée à 1232 octets avec EDNS ; une réponse trop grande porte le drapeau `TC` pour permettre au client de réessayer en TCP. EDNS(0) et son indicateur DNSSEC `DO` sont pris en charge ; les autres options EDNS ne sont pas relayées. La validation DNSSEC reste du ressort de l'upstream.
 
@@ -44,7 +44,7 @@ Un wildcard déclare sa zone comme locale : son apex et tous ses descendants res
 
 Ces réponses sont des substitutions locales : les drapeaux `AA` et `AD` restent désactivés, sans SOA ni validation DNSSEC locale. Les réponses négatives locales sans SOA ne fournissent pas de TTL de cache négatif ([RFC 2308](https://www.rfc-editor.org/rfc/rfc2308.html#section-5)). Les réponses locales et les réponses déjà en cache fonctionnent aussi sans récursion (`RD=0`) ; une absence dans le cache est alors refusée. Les classes locales autres que IN, les transferts de zone et les requêtes signées TSIG sont refusés ; les opérations autres que QUERY répondent `NOTIMP`.
 
-Le nombre de requêtes simultanées vers les upstreams est limité à 256 ; un dépassement répond `SERVFAIL`. Les réponses locales et les lectures du cache restent disponibles à cette limite. Les connexions TCP inactives sont fermées après 10 secondes. Les journaux vont sur stderr, sans journalisation de chaque requête par défaut.
+Le nombre de requêtes simultanées vers les upstreams est limité à 256 ; un dépassement répond `SERVFAIL`. Les réponses locales et les lectures du cache restent disponibles à cette limite. Ce plafond reste commun aux générations de configuration et inclut les sondes de reprise. Les connexions TCP inactives sont fermées après 10 secondes. Les journaux vont sur stderr, sans journalisation de chaque requête par défaut.
 
 ## Configuration
 
@@ -79,7 +79,7 @@ Le fichier `config.toml` est lu depuis le répertoire de travail, ou sélectionn
 - **Timeout :** `upstream_timeout_ms` est facultatif, vaut 2000 ms par défaut et accepte 1 à 60000 ms. Le délai total peut atteindre ce délai multiplié par le nombre d'upstreams. Les boucles évidentes vers l'adresse d'écoute sont refusées ; un upstream doit désigner un autre service DNS.
 - **Noms des rewrites :** ASCII ou punycode (`xn--…`), avec underscores autorisés. Le point final est facultatif. Les noms vides, la racine, les échappements DNS et les noms dépassant les limites DNS sont refusés. Hickory valide leur syntaxe.
 - **Wildcards :** seul un préfixe `*.` suivi d'un domaine est accepté, par exemple `*.lan`. Les noms sont normalisés en minuscules avec un point final ; deux règles équivalentes, comme `NAS.LAN` et `nas.lan.`, sont refusées.
-- **Destinations des rewrites :** une seule adresse IPv4 ou IPv6 par règle, sans port ni crochets. Un même nom ne peut pas encore publier les deux familles simultanément.
+- **Destinations des rewrites :** une seule adresse IPv4 ou IPv6 par règle, sans port ni crochets. Dans cette section, un même nom ne peut pas publier les deux familles simultanément ; les règles `$dnsrewrite` des listes permettent de réunir A et AAAA.
 
 La validation de configuration ne contacte pas les upstreams. Appliquer les changements avec `light-dns reload` ; une configuration invalide conserve l'état actif. Un changement de `dns.listen` nécessite un redémarrage.
 
@@ -87,7 +87,7 @@ La validation de configuration ne contacte pas les upstreams. Appliquer les chan
 
 Le filtrage est actif par défaut, avec **[AdGuard DNS filter](https://github.com/AdguardTeam/HostlistsRegistry/tree/main/filters/general/filter_1_DnsFilter)** (dont EasyList/EasyPrivacy adaptées au DNS) et **[Peter Lowe’s](https://pgl.yoyo.org/adservers/)** (également utilisée par uBlock Origin).
 
-Les sources, fichiers locaux, exceptions et délais sont éditables dans `[filtering]` de `config.toml`. `enabled = false` désactive tout filtrage ; `sources = []` conserve uniquement les fichiers et exceptions locaux. Les formats domaines, hosts et règles Adblock DNS simples sont reconnus ; les règles de navigateur incompatibles sont ignorées et comptabilisées.
+Les sources, fichiers locaux, exceptions et délais sont éditables dans `[filtering]` de `config.toml`. `enabled = false` désactive tout filtrage ; `sources = []` conserve uniquement les fichiers et exceptions locaux. Les formats domaines et hosts ainsi que les règles DNS AdGuard courantes sont reconnus : motifs avec jokers, exceptions, `$dnstype`, `$denyallow`, `$dnsrewrite`, `$important` et `$badfilter`. Les regex, règles par appareil et filtres de navigateur restent ignorés et comptabilisés. Les CNAME liés à la question sont contrôlés aussi sur les réponses du cache.
 
 Les fichiers et le cache disque sont préchargés. Les téléchargements et mises à jour se font en arrière-plan avec remplacement atomique de l'index. **Au premier démarrage sans cache, les listes distantes deviennent actives après leur chargement.** Une panne conserve la dernière version valide ; sans version disponible, le DNS continue avec les autres règles et un avertissement.
 
@@ -110,9 +110,11 @@ light-dns                 # Démarrer ; commande serve également disponible
 light-dns cache clear     # Remplacer le cache actif par un cache vide
 light-dns reload          # Relire le fichier TOML utilisé au démarrage
 light-dns stats           # Compteurs et état du cache, au format TOML
+light-dns health          # Échanges DNS UDP/TCP locaux, sans dépendre d’Internet
+light-dns health --upstream # Ajouter une résolution directe de la racine DNS
 ```
 
-Avec Cargo, utiliser par exemple `cargo run -- stats`. L'administration utilise une socket Unix `light-dns.sock` protégée en mode `0600`, sans port réseau. `--socket CHEMIN` sélectionne un autre chemin pour le serveur et ses clients. Aucun fichier TOML n'est nécessaire pour lancer `stats` ou demander un reload ; le serveur conserve le chemin du fichier à relire.
+Avec Cargo, utiliser par exemple `cargo run -- stats`. L'administration utilise une socket Unix `light-dns.sock` protégée en mode `0600`, sans port réseau. Un verrou compagnon `light-dns.sock.lock`, conservé sur disque, permet de récupérer une socket abandonnée après un crash sans retirer une socket active. `--socket CHEMIN` sélectionne un autre chemin pour le serveur et ses clients. Aucun fichier TOML n'est nécessaire pour lancer `stats` ou demander un reload ; le serveur conserve le chemin du fichier à relire.
 
 Le rechargement prépare puis remplace atomiquement rewrites, filtres, upstreams et paramètres de cache. Une réussite vide le cache DNS ; un échec conserve la configuration et le cache actifs. Les requêtes en cours terminent avec leur ancien état et les connexions TCP restent ouvertes. Les compteurs persistent jusqu'au redémarrage. Il n'y a pas de surveillance automatique du TOML ; l'actualisation périodique des listes de filtres reste active.
 
@@ -196,6 +198,7 @@ src/
 │   └── server/
 │       ├── mod.rs           # Écoutes UDP/TCP et cycle de vie du serveur
 │       ├── handler.rs       # Traitement des requêtes
+│       ├── health.rs        # Sondes DNS locales et diagnostic upstream
 │       ├── runtime.rs       # État partagé et rechargement atomique
 │       ├── stats.rs         # Compteurs légers
 │       └── response.rs      # Réponses DNS, EDNS et troncature

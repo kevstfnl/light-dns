@@ -1,7 +1,8 @@
 mod handler;
+mod health;
 mod response;
 mod runtime;
-mod stats;
+pub(super) mod stats;
 
 pub use super::cache::CacheStats;
 use crate::config::Config;
@@ -24,9 +25,15 @@ pub struct DnsServer {
 #[derive(Clone)]
 pub struct DnsControl {
     runtime: Arc<Runtime>,
+    address: SocketAddr,
 }
 
 impl DnsControl {
+    /// Vérifie les transports locaux, puis éventuellement une résolution directe upstream.
+    pub async fn health(&self, upstream: bool) -> io::Result<()> {
+        health::check(self.address, &self.runtime, upstream).await
+    }
+
     pub async fn reload(&self, config: Config) -> io::Result<()> {
         self.runtime.reload(config).await
     }
@@ -72,9 +79,7 @@ impl DnsServer {
 /// Ouvre UDP et TCP sur la même adresse et retourne le serveur et l'adresse liée.
 pub async fn bind(config: Config) -> io::Result<(DnsServer, SocketAddr)> {
     // Les deux binds doivent réussir avant d'enregistrer les tâches d'écoute.
-    let udp = UdpSocket::bind(config.dns.listen).await?;
-    let address = udp.local_addr()?;
-    let tcp = TcpListener::bind(address).await?;
+    let (udp, tcp, address) = bind_transports(config.dns.listen).await?;
     let runtime = Runtime::prepare(config).await?;
     let mut server = Server::new(Handler::new(runtime.clone()));
     server.register_socket(udp);
@@ -82,8 +87,25 @@ pub async fn bind(config: Config) -> io::Result<(DnsServer, SocketAddr)> {
     Ok((
         DnsServer {
             inner: server,
-            control: DnsControl { runtime },
+            control: DnsControl { runtime, address },
         },
         address,
     ))
+}
+
+// Un port choisi automatiquement doit être libre dans les deux espaces UDP/TCP.
+async fn bind_transports(listen: SocketAddr) -> io::Result<(UdpSocket, TcpListener, SocketAddr)> {
+    for attempt in 0..16 {
+        let tcp = TcpListener::bind(listen).await?;
+        let address = tcp.local_addr()?;
+        match UdpSocket::bind(address).await {
+            Ok(udp) => return Ok((udp, tcp, address)),
+            Err(error)
+                if listen.port() == 0
+                    && error.kind() == io::ErrorKind::AddrInUse
+                    && attempt < 15 => {}
+            Err(error) => return Err(error),
+        }
+    }
+    Err(io::Error::other("aucun port UDP/TCP commun disponible"))
 }

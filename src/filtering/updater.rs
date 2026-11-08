@@ -255,7 +255,7 @@ async fn validate_remote(text: String) -> io::Result<String> {
             ));
         }
         let parsed = parser::parse(&text, false)?;
-        if parsed.rules.is_empty() && parsed.disabled.is_empty() {
+        if parsed.rules.is_empty() && parsed.simple.is_empty() && parsed.disabled.is_empty() {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
                 "aucune règle DNS compatible dans la liste distante",

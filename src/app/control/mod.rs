@@ -16,9 +16,9 @@ pub(super) struct ControlServer {
 }
 
 impl ControlServer {
-    pub fn bind(path: PathBuf) -> io::Result<Self> {
+    pub async fn bind(path: PathBuf) -> io::Result<Self> {
         Ok(Self {
-            listener: Listener::bind(path)?,
+            listener: Listener::bind(path).await?,
             clients: JoinSet::new(),
         })
     }
@@ -75,6 +75,10 @@ async fn execute(
             tracing::info!("configuration rechargée ; cache DNS remplacé");
             Ok("configuration rechargée\n".into())
         }
+        b"health\n" | b"health upstream\n" => {
+            control.health(command == b"health upstream\n").await?;
+            Ok("DNS disponible\n".into())
+        }
         b"stats\n" => toml::to_string(&control.stats().await).map_err(io::Error::other),
         _ => Err(io::Error::new(
             io::ErrorKind::InvalidInput,
@@ -88,6 +92,8 @@ pub(super) async fn request(path: PathBuf, command: Command) -> io::Result<Strin
         Command::ClearCache => b"cache clear\n".as_slice(),
         Command::Reload => b"reload\n".as_slice(),
         Command::Stats => b"stats\n".as_slice(),
+        Command::Health(false) => b"health\n".as_slice(),
+        Command::Health(true) => b"health upstream\n".as_slice(),
         _ => {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,

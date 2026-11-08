@@ -24,7 +24,7 @@ services:
     tmpfs:
       - /run/light-dns:uid=65532,gid=65532,mode=0700,size=1m
     healthcheck:
-      test: ["CMD", "/usr/local/bin/light-dns", "stats"]
+      test: ["CMD", "/usr/local/bin/light-dns", "health"]
       interval: 30s
       timeout: 5s
       retries: 3

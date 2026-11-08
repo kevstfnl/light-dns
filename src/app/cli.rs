@@ -7,7 +7,7 @@ Sans commande : démarrer le serveur DNS.
   cache clear  Vider le cache DNS du serveur actif
   reload       Recharger son fichier TOML, sans changer ses écoutes
   stats        Afficher les statistiques du serveur actif
-  --help       Afficher cette aide
+  health       Vérifier UDP/TCP local (--upstream pour tester aussi les upstreams)\n  --help       Afficher cette aide
 
 Défauts : --config config.toml ; --socket light-dns.sock.
 Les commandes d'administration utilisent uniquement --socket.
@@ -18,6 +18,7 @@ pub(super) enum Command {
     ClearCache,
     Reload,
     Stats,
+    Health(bool),
     Help,
 }
 
@@ -65,6 +66,8 @@ impl Arguments {
             [one] if one == "serve" => Command::Serve,
             [one] if one == "reload" => Command::Reload,
             [one] if one == "stats" => Command::Stats,
+            [one] if one == "health" => Command::Health(false),
+            [one, two] if one == "health" && two == "--upstream" => Command::Health(true),
             [one, two] if one == "cache" && two == "clear" => Command::ClearCache,
             _ => {
                 return Err(io::Error::new(

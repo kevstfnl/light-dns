@@ -7,7 +7,7 @@ use tokio::{
 
 #[tokio::test]
 async fn imports_domains_hosts_and_dns_adblock_rules() -> TestResult {
-    let server = TestServer::local("\u{feff}! test\n# comment\n[Adblock Plus 2.0]\nADS.TEST\n0.0.0.0 hosts.test other.test # comment\n:: ipv6.test\n127.0.0.1 loopback.test localhost localhost.localdomain\n||anchored.test^\n", "", &[]).await?;
+    let server = TestServer::local("\u{feff}! test\n# comment\n[Adblock Plus 2.0]\nADS.TEST\n0.0.0.0 hosts.test other.test # comment $var | wildcard*\n:: ipv6.test\n127.0.0.1 loopback.test localhost localhost.localdomain\n||anchored.test^\n", "", &[]).await?;
     for domain in [
         "ads.test.",
         "sub.ADS.TEST.",
@@ -68,13 +68,16 @@ async fn ignores_web_filters_unsupported_options_and_nonblocking_hosts() -> Test
         "url.test.",
         "local.test.",
         "safe.com.",
-        "a.wild.test.",
         "conditional-body.test.",
         "conditional-else.test.",
         "conditional-tab.test.",
     ] {
         assert_eq!(server.ask(domain).await?.answers.len(), 1, "{domain}");
     }
+    assert_eq!(
+        server.ask("a.wild.test.").await?.response_code,
+        ResponseCode::NXDomain
+    );
     assert_eq!(
         server.ask("sentinel.test.").await?.response_code,
         ResponseCode::NXDomain

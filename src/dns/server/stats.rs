@@ -12,6 +12,11 @@ pub struct ServerStats {
     pub cache_hits: u64,
     pub forwarded: u64,
     pub errors: u64,
+    pub upstream_failures: u64,
+    pub upstream_skipped: u64,
+    pub upstream_probes: u64,
+    pub cname_blocked: u64,
+    pub rewritten: u64,
     pub reloads: u64,
     pub cache_clears: u64,
     pub filter_rules: usize,
@@ -20,13 +25,18 @@ pub struct ServerStats {
 }
 
 #[derive(Default)]
-pub(super) struct Counters {
+pub(crate) struct Counters {
     pub requests: AtomicU64,
     pub local_answers: AtomicU64,
     pub blocked: AtomicU64,
     pub cache_hits: AtomicU64,
     pub forwarded: AtomicU64,
     pub errors: AtomicU64,
+    pub upstream_failures: AtomicU64,
+    pub upstream_skipped: AtomicU64,
+    pub upstream_probes: AtomicU64,
+    pub cname_blocked: AtomicU64,
+    pub rewritten: AtomicU64,
     pub reloads: AtomicU64,
     pub cache_clears: AtomicU64,
 }
@@ -50,6 +60,11 @@ impl Counters {
             cache_hits: self.cache_hits.load(Ordering::Relaxed),
             forwarded: self.forwarded.load(Ordering::Relaxed),
             errors: self.errors.load(Ordering::Relaxed),
+            upstream_failures: self.upstream_failures.load(Ordering::Relaxed),
+            upstream_skipped: self.upstream_skipped.load(Ordering::Relaxed),
+            upstream_probes: self.upstream_probes.load(Ordering::Relaxed),
+            cname_blocked: self.cname_blocked.load(Ordering::Relaxed),
+            rewritten: self.rewritten.load(Ordering::Relaxed),
             reloads: self.reloads.load(Ordering::Relaxed),
             cache_clears: self.cache_clears.load(Ordering::Relaxed),
             filter_rules,

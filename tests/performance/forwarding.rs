@@ -312,6 +312,20 @@ async fn dns_forwarding() -> TestResult {
         fs::create_dir_all(parent)?;
     }
     let ticks = ticks_per_second()?;
+    let concurrencies = match std::env::var("LIGHT_DNS_BENCH_CONCURRENCY") {
+        Ok(value) => {
+            let values = value
+                .split(',')
+                .map(str::parse::<usize>)
+                .collect::<Result<Vec<_>, _>>()?;
+            if values.is_empty() || values.iter().any(|value| !(1..=256).contains(value)) {
+                return Err(io::Error::other("concurrence benchmark attendue : 1 à 256").into());
+            }
+            values
+        }
+        Err(std::env::VarError::NotPresent) => vec![1, 32, 256],
+        Err(error) => return Err(error.into()),
+    };
     let mut csv = String::from(
         "variant,scenario,concurrency,trial,samples,errors,warmup_errors,seconds,qps,p50_us,p95_us,cpu_ms,cpu_us_per_query,rss_before_kib,rss_peak_kib,tcp_connections\n",
     );
@@ -322,7 +336,7 @@ async fn dns_forwarding() -> TestResult {
             Scenario::Fallback,
             Scenario::Failover,
         ] {
-            for concurrency in [1, 32, 256] {
+            for &concurrency in &concurrencies {
                 // Alternate order between trials to reduce drift from CPU frequency/load.
                 for index in 0..binaries.len() {
                     let index = if trial % 2 == 0 {

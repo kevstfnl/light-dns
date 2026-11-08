@@ -114,7 +114,7 @@ async fn nonroot_image_serves_udp_tcp_reloads_and_stops_cleanly() -> TestResult 
         "--publish",
         "127.0.0.1::1053/tcp",
         "--health-cmd",
-        "/usr/local/bin/light-dns stats",
+        "/usr/local/bin/light-dns health",
         "--health-interval",
         "1s",
         "--health-timeout",
@@ -215,6 +215,17 @@ async fn nonroot_image_serves_udp_tcp_reloads_and_stops_cleanly() -> TestResult 
     assert!(stats.status.success());
     let stats: toml::Table = toml::from_str(&String::from_utf8(stats.stdout)?)?;
     assert_eq!(stats["filter_rules"].as_integer(), Some(1));
+    checked(&["kill", "--signal", "KILL", &container.0]).await?;
+    checked(&["start", &container.0]).await?;
+    container.wait_healthy().await?;
+    let udp_address = container.port("udp").await?;
+    assert_eq!(
+        udp(udp_address, &query("blocked.test.")?)
+            .await?
+            .0
+            .response_code,
+        ResponseCode::NXDomain
+    );
     checked(&["stop", "--timeout", "8", &container.0]).await?;
     assert_eq!(
         checked(&["inspect", "--format", "{{.State.ExitCode}}", &container.0]).await?,

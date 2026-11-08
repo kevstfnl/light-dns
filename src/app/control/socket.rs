@@ -1,7 +1,8 @@
 use std::{
     fs, io,
-    os::unix::fs::{FileTypeExt, MetadataExt, PermissionsExt},
+    os::unix::fs::{FileTypeExt, MetadataExt, OpenOptionsExt, PermissionsExt},
     path::PathBuf,
+    time::Duration,
 };
 use tokio::{
     io::AsyncReadExt,
@@ -14,11 +15,65 @@ pub(super) struct Listener {
     inode: u64,
     device: u64,
     owner: u32,
+    // Ne pas supprimer ce fichier : tous les démarrages doivent verrouiller le même inode.
+    _lock: fs::File,
 }
 
 impl Listener {
-    pub fn bind(path: PathBuf) -> io::Result<Self> {
-        // Ne jamais effacer un fichier ou une socket préexistante, même après un crash.
+    pub async fn bind(path: PathBuf) -> io::Result<Self> {
+        // Une paire privée fournit l'UID effectif sans appel système unsafe ni dépendance.
+        let (identity_stream, _) = UnixStream::pair()?;
+        let owner = identity_stream.peer_cred()?.uid();
+        let mut lock_path = path.as_os_str().to_owned();
+        lock_path.push(".lock");
+        let lock_path = PathBuf::from(lock_path);
+        if let Ok(metadata) = fs::symlink_metadata(&lock_path)
+            && !metadata.file_type().is_file()
+        {
+            return Err(io::Error::other("le verrou doit être un fichier régulier"));
+        }
+        let lock = fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .mode(0o600)
+            .open(&lock_path)?;
+        let identity = lock.metadata()?;
+        let linked = fs::symlink_metadata(&lock_path)?;
+        if !linked.file_type().is_file()
+            || identity.uid() != owner
+            || identity.mode() & 0o077 != 0
+            || identity.ino() != linked.ino()
+            || identity.dev() != linked.dev()
+        {
+            return Err(io::Error::other("identité du verrou modifiée"));
+        }
+        lock.try_lock().map_err(io::Error::other)?;
+        if let Ok(metadata) = fs::symlink_metadata(&path) {
+            if !metadata.file_type().is_socket() || metadata.uid() != identity.uid() {
+                return Err(io::Error::other("chemin de contrôle existant protégé"));
+            }
+            match tokio::time::timeout(Duration::from_millis(250), UnixStream::connect(&path)).await
+            {
+                Ok(Err(error)) if error.kind() == io::ErrorKind::ConnectionRefused => {}
+                _ => {
+                    return Err(io::Error::new(
+                        io::ErrorKind::AddrInUse,
+                        "socket de contrôle active ou inaccessible",
+                    ));
+                }
+            }
+            let current = fs::symlink_metadata(&path)?;
+            if !current.file_type().is_socket()
+                || current.ino() != metadata.ino()
+                || current.dev() != metadata.dev()
+                || current.uid() != metadata.uid()
+            {
+                return Err(io::Error::other("identité de la socket modifiée"));
+            }
+            fs::remove_file(&path)?;
+        }
         let inner = UnixListener::bind(&path)?;
         let metadata = fs::symlink_metadata(&path)?;
         let listener = Self {
@@ -27,6 +82,7 @@ impl Listener {
             inode: metadata.ino(),
             device: metadata.dev(),
             owner: metadata.uid(),
+            _lock: lock,
         };
         fs::set_permissions(&listener.path, fs::Permissions::from_mode(0o600))?;
         Ok(listener)

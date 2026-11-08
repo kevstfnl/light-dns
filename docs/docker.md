@@ -36,7 +36,7 @@ docker compose exec light-dns light-dns reload
 docker compose stop
 ```
 
-La CLI utilise la socket locale du conteneur ; aucun port supplémentaire ni montage de socket sur l'hôte n'est nécessaire. Le contrôle de santé Compose appelle `stats` : il vérifie la disponibilité du processus et de son contrôle local, sans sonder un upstream Internet.
+La CLI utilise la socket locale du conteneur ; aucun port supplémentaire ni montage de socket sur l'hôte n'est nécessaire. Le contrôle de santé Compose appelle `health` : il vérifie le contrôle local et de vrais échanges DNS UDP/TCP, sans sonder un upstream Internet. `docker compose exec light-dns light-dns health --upstream` ajoute un diagnostic externe explicite. Un état Docker `unhealthy` ne redémarre pas à lui seul un conteneur ; `restart: unless-stopped` couvre les sorties du processus et les redémarrages du moteur.
 
 Un reload réussi applique le TOML sans fermer les connexions DNS et remplace le cache. Un changement d'écoute nécessite un redémarrage ; pour conserver les publications Compose, garder le port interne 1053. Docker envoie `SIGTERM`, avec 10 secondes de grâce côté Compose et 5 secondes d'attente côté application. `docker compose stop` conserve le cache disque des filtres.
 
@@ -82,9 +82,9 @@ docker build --platform linux/amd64 --tag light-dns:validation .
 cargo test --test integration deployment::docker -- --ignored --nocapture
 ```
 
-Ce test explicite nécessite l'accès au moteur Docker et l'image construite. Il crée son propre conteneur et son volume temporaire, sans utiliser le déploiement Compose existant. Il vérifie l'utilisateur non privilégié, les montages, les réponses DNS sur les ports UDP/TCP publiés, la CLI, le rejet d'un reload invalide, une sauvegarde TOML atomique, la conservation d'une connexion TCP et l'arrêt par `SIGTERM` avec un code nul. Il vérifie aussi le healthcheck `stats` et un cache distant préchargé dans le volume, retrouvé après redémarrage hors ligne. Les tests HTTP locaux couvrent séparément le téléchargement et la sauvegarde. Il utilise uniquement des réponses locales, sans upstream Internet, et nettoie ses ressources temporaires. Il reste ignoré par `cargo test` normal. `LIGHT_DNS_TEST_IMAGE` permet de choisir un tag de validation dédié sans remplacer une image existante ; le test vérifie et impose Linux AMD64.
+Ce test explicite nécessite l'accès au moteur Docker et l'image construite. Il crée son propre conteneur et son volume temporaire, sans utiliser le déploiement Compose existant. Il vérifie l'utilisateur non privilégié, les montages, les réponses DNS sur les ports UDP/TCP publiés, la CLI, le rejet d'un reload invalide, une sauvegarde TOML atomique, la conservation d'une connexion TCP et l'arrêt par `SIGTERM` avec un code nul. Il vérifie aussi le healthcheck `health` et un cache distant préchargé dans le volume, retrouvé après redémarrage hors ligne. Les tests HTTP locaux couvrent séparément le téléchargement et la sauvegarde. Il utilise uniquement des réponses locales, sans upstream Internet, et nettoie ses ressources temporaires. Il reste ignoré par `cargo test` normal. `LIGHT_DNS_TEST_IMAGE` permet de choisir un tag de validation dédié sans remplacer une image existante ; le test vérifie et impose Linux AMD64.
 
-La construction et ce test ont réussi sur Linux AMD64 le 7 novembre 2026. `docker compose config --quiet` a également validé le fichier Compose fourni.
+La construction et ce test ont été revalidés sur Linux AMD64 le 8 novembre 2026, avec le healthcheck UDP/TCP et un redémarrage après SIGKILL. `docker compose config --quiet` a également validé le fichier Compose fourni.
 
 ## Linux ARM64 / Raspberry Pi
 

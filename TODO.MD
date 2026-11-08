@@ -64,7 +64,19 @@ Le builder disponible ne propose que Linux AMD64 ; la procédure ARM64 est docum
 - [x] Ajouter le fichier MIT et les métadonnées Cargo cohérentes.
 - [x] Ajouter la CI Rust 1.99.1 ; ses commandes passent localement (exécution Forgejo à vérifier sur l’instance cible).
 
+## Fiabilité et filtrage étendu
+- [x] Filtrer les cibles CNAME liées à la question DNS, y compris dans le cache et en respectant les exceptions.
+- [x] Récupérer la socket d’administration après un arrêt brutal, avec verrou exclusif et protection des chemins existants.
+- [x] Écarter les upstreams en panne pendant 5 secondes, indépendamment en UDP/TCP, et sonder leur retour sans attendre dans le chemin de réponse sain.
+- [x] Préserver le plafond commun de 256 échanges, sondes et anciennes générations comprises.
+- [x] Ajouter `health` UDP/TCP local et `health --upstream`, sans relire le TOML.
+- [x] Ajouter motifs DNS, `$dnstype`, `$denyallow`, `$dnsrewrite`, exceptions et désactivation par identité complète de règle.
+- [x] Préserver les formats domaines/hosts historiques, les rewrites TOML et les priorités utilisateur.
+- [x] Couvrir cycles CNAME, cache après mise à jour, reprise des upstreams, démarrages concurrents et saturation après reload ; 106 tests fonctionnels réussis.
+- [x] Mesurer le cache et le filtrage avant/après sur cinq essais, avec 100000 domaines et 1000 motifs ; chiffres et surcoûts documentés.
+- [x] Revalider Docker AMD64 : healthcheck UDP/TCP, reload, persistance, SIGKILL et arrêt normal.
+- [ ] Reprendre la campagne forwarding soutenue hors de cet environnement : EPERM observé à 32 puis 1 client, réponses en erreur sous charge ; aucune conclusion de débit ni de bascule retenue.
+
 ## Plus tard
-- [ ] Filtrer les cibles CNAME liées à la question DNS, en respectant l'allowlist.
 - [ ] Exposer des métriques Prometheus (`/metrics`).
 - [ ] Ajouter le support DNS-over-HTTPS / DNS-over-TLS.

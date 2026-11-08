@@ -48,7 +48,33 @@ Les entrées suivantes sont reconnues, avec des noms ASCII/punycode insensibles 
 
 Les exceptions `$important` priment sur les blocages `$important`. L'allowlist TOML et les fichiers d'allowlist sont les exceptions explicites de l'utilisateur : elles priment sur tous les blocages. Les rewrites restent prioritaires sur ces filtres. Les en-têtes, commentaires, doublons et entrées hosts de localhost sont traités sans créer de blocage parasite.
 
-Le filtrage porte sur le nom interrogé. Les sélecteurs cosmétiques, chemins d'URL, expressions régulières, conditions de navigateur, inclusions et modificateurs non pris en charge (dont `$dnstype`, `$dnsrewrite`, `$third-party`) sont ignorés et comptabilisés dans les journaux. Les blocs conditionnels sont ignorés en entier. Seule la partie DNS compatible des listes uBlock/AdGuard est importée.
+## Règles DNS avancées
+
+Les règles DNS courantes suivent la [syntaxe AdGuard](https://adguard-dns.io/kb/general/dns-filtering-syntax/), avec les limites explicites ci-dessous. La compatibilité n’est pas intégrale. Le comportement historique de light-dns est conservé pour les domaines nus et les entrées hosts : ils couvrent aussi leurs sous-domaines, contrairement aux correspondances exactes de ces formats chez AdGuard. Les entrées hosts avec une adresse non nulle/non loopback restent ignorées ; utiliser `$dnsrewrite` ou le TOML pour les adresses locales.
+
+| Syntaxe | Exemple et effet |
+| --- | --- |
+| Motifs | `||ad*.example^`, `|exact.example|`, `|prefix*`, `suffix.example|` ; `*` couvre zéro ou plusieurs caractères, `||` respecte les limites de labels |
+| Types | `||ads.example^$dnstype=A\|AAAA` ; `~A\|~CNAME` exclut ces types. Les noms de types sont insensibles à la casse. Un mélange conserve les inclusions |
+| Domaines exclus | `||example^$denyallow=safe.example\|other.example` ; les sous-domaines de ces exceptions sont inclus |
+| Réécritures | `||host.example^$dnsrewrite=192.0.2.1`, `2001:db8::1`, `target.example` ou `REFUSED` |
+| Forme complète | `||host.example^$dnsrewrite=NOERROR;A;192.0.2.1` ; A, AAAA, CNAME, PTR, MX, TXT, SRV, HTTPS et SVCB sont reconnus |
+| Réponses vides | `$dnsrewrite=NOERROR;;` pour NODATA ; codes reconnus : NOERROR, FORMERR, SERVFAIL, NXDOMAIN, NOTIMP, REFUSED |
+| Exceptions de réécriture | `@@||host.example^$dnsrewrite` retire toutes ses réécritures ; `@@||host.example^$dnsrewrite=192.0.2.1` retire cette valeur seulement |
+
+Un motif absent, par exemple `$dnstype=AAAA,denyallow=safe.example,dnsrewrite=NOERROR;;`, couvre tous les noms. Les valeurs TXT contenant une virgule utilisent `\,` pour ne pas séparer les modificateurs. Les autres données sont validées par le parseur DNS de Hickory. Les réécritures locales ont un TTL de 60 secondes ; elles répondent uniquement pour les types disponibles, ou NODATA.
+
+Les rewrites TOML restent prioritaires, puis l’allowlist utilisateur. Dans les listes, les exceptions `$dnsrewrite` retirent les réécritures correspondantes ; les réécritures restantes priment sur les blocages ordinaires ou `$important`. Un code de réponse/une réponse vide prime sur CNAME, qui prime sur les autres données. Les valeurs A/AAAA et les autres RR compatibles sont réunies sans doublon. Les conflits entre codes ou CNAME de même priorité sont départagés par l’ordre des sources et des lignes. Une exception `$dnsrewrite` ne désactive pas un blocage ordinaire. `$badfilter` compare la règle complète, conditions comprises, indépendamment de l’ordre des modificateurs.
+
+Une réécriture CNAME recherche sa cible dans le même pipeline : rewrites, filtres, cache, upstreams. Le budget réseau est partagé sur la chaîne. Avec `RD=0`, seuls le CNAME et les éventuelles données locales/en cache sont rendus. Les synthèses ne sont pas conservées dans le cache upstream. Les cycles et chaînes dépassant 16 liens répondent SERVFAIL ; les réponses synthétiques ne revendiquent ni autorité ni authentification DNSSEC.
+
+## Contrôle des réponses CNAME
+
+Les cibles CNAME atteignables depuis la question sont contrôlées, y compris sur les réponses déjà en cache et après changement des listes. Les CNAME sans rapport, les autorités et les additionnels ne provoquent pas de blocage. Leur ordre dans la réponse n’a pas d’importance. Le contrôle utilise le type CNAME pour `$dnstype`, sans émettre de requête réseau supplémentaire. Une cible bloquée donne le NXDOMAIN local habituel ; cette synthèse n’est pas cachée. Une exception sur la question dispense du contrôle de blocage de sa chaîne ; une exception sur une cible ne protège pas les cibles suivantes. Les cycles et les chaînes trop longues sont rejetés.
+
+Les noms simples restent dans un index de domaines ; les motifs sont analysés par globset puis compilés en un automate multi-motifs avec regex-automata, hors des workers DNS. Cette compilation évite la stratégie par extension de fichiers de globset, inadaptée aux suffixes DNS communs. Le moteur de compilation borne son NFA à 10 Mio et une erreur conserve l’ancien index actif. Le chargement/reload peut temporairement conserver plusieurs index et structures de compilation : les limites de texte et du cache DNS ne constituent pas un plafond strict de RSS.
+
+Les regex, profils par appareil (`$client`, `$ctag`), sélecteurs cosmétiques, chemins d’URL, conditions de navigateur, inclusions et modificateurs inconnus (`$third-party`, etc.) restent ignorés et comptabilisés. Un modificateur inconnu fait ignorer toute la règle. Les blocs conditionnels sont ignorés en entier. Le filtrage des IP de réponse et des hints HTTPS/SVCB n’est pas ajouté.
 
 Les fichiers locaux et le cache distant valide sont chargés avant l'écoute DNS. Les téléchargements se font ensuite en arrière-plan ; **au premier démarrage sans cache, les listes distantes deviennent actives après leur chargement**, avec un avertissement dans les journaux. Une panne de téléchargement conserve la dernière version valide ; sans version disponible, la liste concernée reste inactive et le service DNS continue. Les téléchargements vides, les pages HTML, les erreurs HTTP, les dépassements de taille et les timeouts sont rejetés.
 
@@ -64,5 +90,5 @@ Les limites sont de 32 sources distantes, 32 fichiers locaux, 8 Mio par liste pa
 - **Côté navigateur :** conserver un bloqueur tel que [uBlock Origin](https://github.com/gorhill/uBlock) pour les chemins d'URL, éléments de page et publicités partageant le domaine d'un contenu utile. Le DNS seul ne distingue pas ces ressources.
 - **Nouveaux noms de homelab :** `home.arpa` est réservé aux réseaux résidentiels ([RFC 8375](https://www.rfc-editor.org/rfc/rfc8375.html)). Déclarer sa zone locale par une règle telle que `"*.home.arpa" = "192.168.1.10"` dans `[rewrites]` évite d'envoyer ses noms aux upstreams ; une règle exacte seule ne réserve pas tout le suffixe.
 
-Le lien vers les upstreams utilise actuellement UDP/TCP en clair. DoH/DoT restent dans la feuille de route. Le [cache DNS en mémoire](cache.md) réduit les requêtes répétées envoyées à l'extérieur ; les filtres restent prioritaires sur ses réponses. Ce cache est distinct du cache disque des listes distantes. Une autre amélioration à étudier est le contrôle des cibles CNAME atteignables depuis la question : le moteur filtre aujourd'hui le nom interrogé, et les exceptions devront être préservées lors de cette évolution.
+Le lien vers les upstreams utilise actuellement UDP/TCP en clair. DoH/DoT restent dans la feuille de route. Le [cache DNS en mémoire](cache.md) réduit les requêtes répétées envoyées à l'extérieur ; les filtres restent prioritaires sur ses réponses. Ce cache est distinct du cache disque des listes distantes. Les cibles CNAME liées à la question sont contrôlées selon les règles et exceptions décrites ci-dessus.
 

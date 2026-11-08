@@ -234,3 +234,40 @@ async fn reload_replaces_filtering_and_cache_settings() -> TestResult {
     assert_eq!(stats["forwarded"].as_integer(), Some(2));
     Ok(())
 }
+
+#[tokio::test]
+async fn health_distinguishes_local_dns_and_upstream_resolution() -> TestResult {
+    use hickory_proto::rr::{Name, Record, rdata::NS};
+    fn root(request: &Message) -> Message {
+        let mut response = answer(request);
+        response.answers = vec![Record::from_rdata(
+            Name::root(),
+            60,
+            RData::NS(NS(Name::from_ascii("ns.test.").unwrap())),
+        )];
+        response
+    }
+    let upstream = Upstream::start(root, root).await?;
+    let daemon = Daemon::new(upstream.address).await?;
+    assert!(daemon.command(&["health"]).await?.status.success());
+    assert!(
+        daemon
+            .command(&["health", "--upstream"])
+            .await?
+            .status
+            .success()
+    );
+    drop(upstream);
+    assert!(daemon.command(&["health"]).await?.status.success());
+    assert!(
+        !daemon
+            .command(&["health", "--upstream"])
+            .await?
+            .status
+            .success()
+    );
+    // Ne relit pas le TOML pour contrôler l'état réellement actif.
+    daemon.replace_config("[broken").await?;
+    assert!(daemon.command(&["health"]).await?.status.success());
+    Ok(())
+}

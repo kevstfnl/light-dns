@@ -1,6 +1,6 @@
 # Cache DNS
 
-Le cache conserve uniquement des réponses upstream admissibles, après les rewrites et les filtres. Ces derniers sont consultés à chaque requête : une nouvelle règle de blocage s'applique même si une réponse positive est déjà en cache. Les réponses locales et les blocages ne sont pas stockés. Le cache reste uniquement en mémoire et disparaît à l'arrêt.
+Le cache conserve uniquement des réponses upstream admissibles, après les rewrites et les filtres. Ces derniers sont consultés à chaque requête : une nouvelle règle de blocage s'applique même si une réponse positive est déjà en cache. Les cibles CNAME atteignables depuis la question sont également contrôlées avec l’index actif. Les synthèses `$dnsrewrite` restent hors cache ; les réponses upstream de leurs cibles peuvent y être conservées séparément. Les réponses locales et les blocages ne sont pas stockés. Le cache reste uniquement en mémoire et disparaît à l'arrêt.
 
 ```toml
 [cache]

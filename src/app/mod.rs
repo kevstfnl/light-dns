@@ -36,7 +36,7 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         .try_init()?;
     let signal = shutdown_signal()?;
     #[cfg(unix)]
-    let mut commands = control::ControlServer::bind(args.socket)?;
+    let mut commands = control::ControlServer::bind(args.socket).await?;
     let (mut server, address) = server::bind(config).await?;
     tracing::info!(%address, "serveur DNS prêt en UDP et TCP");
     let controller = server.control();

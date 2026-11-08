@@ -16,13 +16,22 @@ pub(super) struct Resolver {
 }
 
 impl Resolver {
-    async fn prepare(config: Config) -> io::Result<(Self, Option<Task>)> {
+    async fn prepare(
+        config: Config,
+        counters: Arc<Counters>,
+        permits: Arc<tokio::sync::Semaphore>,
+    ) -> io::Result<(Self, Option<Task>)> {
         let (filters, updater) = filtering::prepare(config.filtering).await?;
         let rewrites = tokio::task::spawn_blocking(move || Rewrites::new(config.rewrites))
             .await
             .map_err(io::Error::other)?;
         let resolver = Self {
-            forwarder: Forwarder::new(config.dns.upstreams, config.dns.upstream_timeout),
+            forwarder: Forwarder::new(
+                config.dns.upstreams,
+                config.dns.upstream_timeout,
+                counters,
+                permits,
+            ),
             rewrites,
             filters,
             cache: ArcSwap::from_pointee(ResponseCache::new(config.cache)),
@@ -42,19 +51,24 @@ impl Drop for Task {
 
 pub(super) struct Runtime {
     pub current: ArcSwap<Resolver>,
-    pub counters: Counters,
+    pub counters: Arc<Counters>,
     started: Instant,
     listen: SocketAddr,
     updater: Mutex<Option<Task>>,
+    permits: Arc<tokio::sync::Semaphore>,
 }
 
 impl Runtime {
     pub async fn prepare(config: Config) -> io::Result<Arc<Self>> {
         let listen = config.dns.listen;
-        let (resolver, updater) = Resolver::prepare(config).await?;
+        let counters = Arc::new(Counters::default());
+        let permits = Arc::new(tokio::sync::Semaphore::new(256));
+        let (resolver, updater) =
+            Resolver::prepare(config, counters.clone(), permits.clone()).await?;
         Ok(Arc::new(Self {
             current: ArcSwap::from_pointee(resolver),
-            counters: Counters::default(),
+            counters,
+            permits,
             started: Instant::now(),
             listen,
             updater: Mutex::new(updater),
@@ -69,9 +83,11 @@ impl Runtime {
             ));
         }
         let mut updater = self.updater.lock().await;
-        let (resolver, next_updater) = Resolver::prepare(config).await?;
+        let (resolver, next_updater) =
+            Resolver::prepare(config, self.counters.clone(), self.permits.clone()).await?;
         // Aucun await entre la publication et la fin du commit : une annulation
         // conserve soit l'ancien état complet, soit le nouveau.
+        self.current.load().forwarder.stop_probes();
         self.current.store(Arc::new(resolver));
         *updater = next_updater;
         Counters::increment(&self.counters.reloads);
@@ -98,6 +114,7 @@ impl Runtime {
     }
 
     pub async fn stop_updater(&self) {
+        self.current.load().forwarder.stop_probes();
         if let Some(mut task) = self.updater.lock().await.take() {
             task.0.abort();
             let _ = (&mut task.0).await;

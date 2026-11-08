@@ -72,3 +72,16 @@ async fn malformed_packets_do_not_stop_udp_or_tcp() -> TestResult {
     server.shutdown_gracefully().await?;
     Ok(())
 }
+
+#[tokio::test]
+async fn health_requires_both_local_transports_even_if_the_control_survives() -> TestResult {
+    let upstream = Upstream::start(answer, answer).await?;
+    let (mut server, _) = start(vec![upstream.address]).await?;
+    let control = server.control();
+    control.health(false).await?;
+    server.shutdown_gracefully().await?;
+    assert!(control.health(false).await.is_err());
+    // Les statistiques seules restent disponibles après fermeture des écoutes.
+    assert!(control.stats().await.requests >= 2);
+    Ok(())
+}

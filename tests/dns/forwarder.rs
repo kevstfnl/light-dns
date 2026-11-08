@@ -97,6 +97,26 @@ async fn unavailable_upstreams_return_servfail_without_stopping_service() -> Tes
         assert_eq!(response.response_code, ResponseCode::ServFail);
         assert!(response.answers.is_empty());
     }
+    assert_eq!(server.control().stats().await.upstream_failures, 1);
+    assert_eq!(server.control().stats().await.upstream_skipped, 1);
+    // Sans autre upstream sain, un seul échange doit pouvoir rouvrir le circuit.
+    let mut bytes = [0; 4096];
+    while silent.try_recv_from(&mut bytes).is_ok() {}
+    let responder = tokio::spawn(async move {
+        let (length, peer) = silent.recv_from(&mut bytes).await?;
+        let request = Message::from_vec(&bytes[..length])?;
+        silent.send_to(&answer(&request).to_vec()?, peer).await?;
+        TestResult::Ok(())
+    });
+    sleep(Duration::from_millis(5050)).await;
+    assert_eq!(
+        udp(address, &query("recovered.test.")?)
+            .await?
+            .0
+            .response_code,
+        ResponseCode::NoError
+    );
+    timeout(Duration::from_secs(2), responder).await???;
     server.shutdown_gracefully().await?;
     Ok(())
 }
@@ -285,6 +305,81 @@ async fn udp_and_tcp_fallback_share_one_upstream_deadline() -> TestResult {
         TestResult::Ok(())
     })
     .await??;
+    server.shutdown_gracefully().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn failed_upstream_is_skipped_then_recovers_without_blocking_healthy_answers() -> TestResult {
+    use std::sync::atomic::Ordering;
+    let (silent, tcp_fixture, recovering_address) =
+        fixture_transports("127.0.0.1:0".parse()?).await?;
+    let healthy = Upstream::start(answer, answer).await?;
+    let mut config = test_config(vec![recovering_address, healthy.address])?;
+    config.dns.upstream_timeout = Duration::from_millis(100);
+    let (mut server, address) = bind(config).await?;
+    udp(address, &query("first.test.")?).await?;
+    for _ in 0..4 {
+        udp(address, &query("second.test.")?).await?;
+    }
+    assert_eq!(server.control().stats().await.upstream_failures, 1);
+    assert_eq!(server.control().stats().await.upstream_skipped, 4);
+    // Le même endpoint peut déjà fonctionner en TCP pendant sa panne UDP.
+    let tcp_task = tokio::spawn(async move {
+        let (mut stream, _) = tcp_fixture.accept().await?;
+        let request = read_tcp(&mut stream).await?;
+        write_tcp(&mut stream, &answer(&request)).await
+    });
+    let mut client = TcpStream::connect(address).await?;
+    write_tcp(&mut client, &query("tcp.test.")?).await?;
+    assert_eq!(read_tcp(&mut client).await?.answers.len(), 1);
+    timeout(Duration::from_secs(2), tcp_task).await???;
+    drop(silent);
+    let recovered = UdpSocket::bind(recovering_address).await?;
+    let recovered_hits = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let hits = recovered_hits.clone();
+    let recovered_task = tokio::spawn(async move {
+        let mut bytes = [0; 4096];
+        for _ in 0..2 {
+            let (length, peer) = recovered.recv_from(&mut bytes).await?;
+            let request = Message::from_vec(&bytes[..length])?;
+            recovered.send_to(&answer(&request).to_vec()?, peer).await?;
+            hits.fetch_add(1, Ordering::SeqCst);
+        }
+        TestResult::Ok(())
+    });
+    sleep(Duration::from_millis(5050)).await;
+    udp(address, &query("probe.test.")?).await?;
+    let until = tokio::time::Instant::now() + Duration::from_secs(2);
+    while recovered_hits.load(Ordering::SeqCst) == 0 {
+        assert!(tokio::time::Instant::now() < until);
+        sleep(Duration::from_millis(5)).await;
+    }
+    sleep(Duration::from_millis(10)).await;
+    let before = healthy.hits.load(Ordering::SeqCst);
+    udp(address, &query("returned.test.")?).await?;
+    assert_eq!(healthy.hits.load(Ordering::SeqCst), before);
+    assert_eq!(server.control().stats().await.upstream_probes, 1);
+    timeout(Duration::from_secs(2), recovered_task).await???;
+    server.shutdown_gracefully().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn semantic_failures_do_not_quarantine_a_responsive_upstream() -> TestResult {
+    fn failed(request: &Message) -> Message {
+        let mut response = answer(request);
+        response.metadata.response_code = ResponseCode::ServFail;
+        response
+    }
+    let failed = Upstream::start(failed, failed).await?;
+    let healthy = Upstream::start(answer, answer).await?;
+    let (mut server, address) = start(vec![failed.address, healthy.address]).await?;
+    for _ in 0..3 {
+        udp(address, &query("semantic.test.")?).await?;
+    }
+    assert_eq!(failed.hits.load(std::sync::atomic::Ordering::SeqCst), 3);
+    assert_eq!(server.control().stats().await.upstream_failures, 0);
     server.shutdown_gracefully().await?;
     Ok(())
 }
