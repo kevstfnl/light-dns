@@ -101,11 +101,12 @@ async fn measure(
     let cpu_ms = after.cpu_ticks.saturating_sub(before.cpu_ticks) as f64 * 1000.0 / ticks;
     writeln!(
         csv,
-        "{name},{SAMPLES},{:.2},{:.2},{:.2},{:.2},{cpu_ms:.1},{},{},{},{},{}",
+        "{name},{SAMPLES},{:.2},{:.2},{:.2},{:.2},{:.2},{cpu_ms:.1},{},{},{},{},{}",
         seconds * 1000.0,
         SAMPLES as f64 / seconds,
         latencies[SAMPLES / 2],
         latencies[SAMPLES * 95 / 100],
+        latencies[SAMPLES * 99 / 100],
         before.rss_kib,
         after.rss_kib,
         stats.entries,
@@ -131,7 +132,7 @@ async fn dns_cache() -> TestResult {
     }
     let ticks = ticks_per_second()?;
     let mut csv = String::from(
-        "scenario,samples,elapsed_ms,qps,p50_us,p95_us,cpu_ms,rss_before_kib,rss_after_kib,cache_entries,cache_weight_bytes,upstream_queries\n",
+        "scenario,samples,elapsed_ms,qps,p50_us,p95_us,p99_us,cpu_ms,rss_before_kib,rss_after_kib,cache_entries,cache_weight_bytes,upstream_queries\n",
     );
     for (name, enabled, local, blocked, unique) in [
         ("forward_no_cache", false, false, false, false),

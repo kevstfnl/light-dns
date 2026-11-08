@@ -48,6 +48,29 @@ Les entrées suivantes sont reconnues, avec des noms ASCII/punycode insensibles 
 
 Les exceptions `$important` priment sur les blocages `$important`. L'allowlist TOML et les fichiers d'allowlist sont les exceptions explicites de l'utilisateur : elles priment sur tous les blocages. Les rewrites restent prioritaires sur ces filtres. Les en-têtes, commentaires, doublons et entrées hosts de localhost sont traités sans créer de blocage parasite.
 
+## Confiance des réécritures de listes
+
+Les rewrites `[rewrites]` du TOML restent autorisés et prioritaires. Les fichiers locaux explicitement déclarés dans `blocklists` et `allowlist_files` sont de confiance pour la famille `$dnsrewrite` : leur contenu doit rester sous le contrôle de l’administrateur.
+
+**Les sources distantes ne sont pas autorisées à fournir des `$dnsrewrite` par défaut**, y compris les sources intégrées et les listes déjà présentes dans le cache disque. Le blocage ordinaire, les exceptions, `$important` et `$badfilter` ordinaires restent actifs.
+
+Une autorisation facultative s’applique uniquement à la source concernée :
+
+```toml
+[[filtering.sources]]
+name = "rewrites-de-confiance"
+url = "https://example.com/trusted-dns.txt"
+allow_dnsrewrite = true # false si absent ; HTTPS obligatoire si true
+```
+
+Ne l’activer que pour une source dont l’éditeur peut légitimement synthétiser des réponses DNS pour le LAN. HTTPS protège le transport ; il ne protège pas d’un éditeur ou serveur compromis. La confiance inclut les destinations de ses redirections HTTPS. Les sources HTTP restent utilisables pour le filtrage ordinaire, avec un risque d’altération du blocage et des exceptions en transit.
+
+Sans cette autorisation, toute règle reconnue utilisant le modificateur `$dnsrewrite` est ignorée **en entier**, y compris les exceptions `@@...$dnsrewrite`, les variantes `$important` et les désactivations `$dnsrewrite=...,badfilter`. Elle ne devient ni un blocage ni une exception ordinaire, et ne peut pas neutraliser un rewrite local/de confiance. Une règle de blocage distincte du même nom continue de s’appliquer. Les exclusions sont comptées et signalées au chargement, sans journalisation par requête.
+
+Une liste valide composée seulement de rewrites interdits est acceptée mais inactive. Les listes distantes vides, incompatibles ou corrompues restent rejetées selon les règles habituelles. Le cache conserve le texte original ; le TOML courant décide de la confiance à chaque chargement. Retirer `allow_dnsrewrite` puis exécuter `light-dns reload` révoque l’autorisation, même hors ligne, et vide le cache DNS comme tout reload réussi. Aucun changement de format du cache disque ni retéléchargement n’est requis.
+
+Les téléchargements gardent leurs limites de taille et de durée et la validation TLS de Reqwest. Les redirections sont bornées, limitées à HTTP(S), sans identifiants ; tout passage de HTTPS à HTTP est refusé. Une erreur de téléchargement ou de compilation conserve le dernier index et le dernier fichier persisté valides.
+
 ## Règles DNS avancées
 
 Les règles DNS courantes suivent la [syntaxe AdGuard](https://adguard-dns.io/kb/general/dns-filtering-syntax/), avec les limites explicites ci-dessous. La compatibilité n’est pas intégrale. Le comportement historique de light-dns est conservé pour les domaines nus et les entrées hosts : ils couvrent aussi leurs sous-domaines, contrairement aux correspondances exactes de ces formats chez AdGuard. Les entrées hosts avec une adresse non nulle/non loopback restent ignorées ; utiliser `$dnsrewrite` ou le TOML pour les adresses locales.
@@ -78,7 +101,7 @@ Les regex, profils par appareil (`$client`, `$ctag`), sélecteurs cosmétiques, 
 
 Les fichiers locaux et le cache distant valide sont chargés avant l'écoute DNS. Les téléchargements se font ensuite en arrière-plan ; **au premier démarrage sans cache, les listes distantes deviennent actives après leur chargement**, avec un avertissement dans les journaux. Une panne de téléchargement conserve la dernière version valide ; sans version disponible, la liste concernée reste inactive et le service DNS continue. Les téléchargements vides, les pages HTML, les erreurs HTTP, les dépassements de taille et les timeouts sont rejetés.
 
-Les mises à jour relisent aussi les fichiers locaux. Un nouvel index est construit hors des tâches DNS puis remplacé atomiquement en mémoire ; une version invalide conserve l'ancien index. Le cache est enregistré par remplacement de fichier et lié à l'URL de sa source, pour permettre un redémarrage hors ligne. Le répertoire de cache doit être dédié au service et accessible en écriture. En cas d'échec de lecture, de téléchargement ou de compilation, une nouvelle tentative a lieu après au plus 5 minutes. Un échec d’écriture du cache est signalé ; l’index valide reste actif en mémoire et la sauvegarde est réessayée après au plus 5 minutes (ou l’intervalle configuré s’il est plus court), sans retélécharger une liste encore fraîche. L’ancien fichier reste intact ; un redémarrage avant la sauvegarde réussie recharge cette ancienne version.
+Les mises à jour relisent aussi les fichiers locaux. Un nouvel index est construit hors des tâches DNS puis remplacé atomiquement en mémoire ; une version invalide conserve l'ancien index. Le cache est enregistré par remplacement de fichier et lié à l'URL de sa source, pour permettre un redémarrage hors ligne. Le répertoire de cache doit être dédié au service et accessible en écriture. En cas d'échec de lecture, de téléchargement ou de compilation, une nouvelle tentative a lieu après au plus 5 minutes. Les nouveaux fichiers persistés sont privés (`0600` sous Unix). Un temporaire abandonné après un crash n’est ni écrasé ni supprimé ; jusqu’à 32 noms sont essayés par sauvegarde, puis la tentative est reportée. Les noms déjà pris ne bloquent donc pas systématiquement les redémarrages avec le PID 1 de Docker. Les temporaires abandonnés restent à inspecter/nettoyer manuellement service arrêté si des crashes répétés les accumulent. Le remplacement atomique protège un crash du processus ; aucune garantie supplémentaire contre une coupure électrique n’est ajoutée. Un échec d’écriture du cache est signalé ; l’index valide reste actif en mémoire et la sauvegarde est réessayée après au plus 5 minutes (ou l’intervalle configuré s’il est plus court), sans retélécharger une liste encore fraîche. L’ancien fichier reste intact ; un redémarrage avant la sauvegarde réussie recharge cette ancienne version.
 
 Les limites sont de 32 sources distantes, 32 fichiers locaux, 8 Mio par liste par défaut (1024 octets à 16 Mio configurables), 64 Mio de texte cumulé et 500000 règles avant compilation. Ces limites concernent les entrées ; elles ne constituent pas une mesure de RAM. L'intervalle de mise à jour accepte 1 à 604800 secondes et le timeout 1 à 120 secondes. Les tests utilisent des listes miniatures et un serveur HTTP local, sans Internet.
 

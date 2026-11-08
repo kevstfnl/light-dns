@@ -1,4 +1,4 @@
-use super::measurement::{Usage, ticks_per_second};
+use super::measurement::{Failures, Usage, percentile, ticks_per_second};
 use crate::support::{TestResult, dns::*, process::TestDirectory};
 use hickory_proto::{
     op::{Message, ResponseCode},
@@ -50,7 +50,7 @@ struct Case {
     code: ResponseCode,
 }
 
-async fn measure(binary: &Path, case: &Case, base: &str, ticks: f64) -> TestResult<String> {
+async fn measure(binary: &Path, case: &Case, base: &str, ticks: f64) -> TestResult<(String, bool)> {
     let directory = TestDirectory::new()?;
     let upstream = Upstream::start(response, response).await?;
     let reserve = UdpSocket::bind("127.0.0.1:0").await?;
@@ -73,7 +73,7 @@ async fn measure(binary: &Path, case: &Case, base: &str, ticks: f64) -> TestResu
     fs::write(
         &config,
         format!(
-            "[dns]\nlisten = '{address}'\nupstreams = ['{}']\n[rewrites]\n[cache]\nenabled = {}\n[filtering]\nsources = []\nblocklists = ['{}']\n",
+            "[dns]\nlisten = '{address}'\nupstreams = ['{}']\n[rewrites]\n'local.example' = '192.0.2.42'\n'*.home.arpa' = '192.0.2.42'\n[cache]\nenabled = {}\n[filtering]\nallowlist = ['safe.block50000.example']\nsources = []\nblocklists = ['{}']\n",
             upstream.address,
             case.cached,
             list.display()
@@ -113,28 +113,64 @@ async fn measure(binary: &Path, case: &Case, base: &str, ticks: f64) -> TestResu
     let mut request = query(case.query)?;
     request.queries[0].query_type = case.kind;
     let mut buffer = [0; 4096];
-    for _ in 0..100 {
-        exchange(&client, &request, &mut buffer, case.code).await?;
+    for index in 0..100 {
+        exchange(&client, &request, &mut buffer, case)
+            .await
+            .map_err(|error| {
+                io::Error::other(format!(
+                    "échauffement interrompu après {index} succès, 1 erreur : {error}"
+                ))
+            })?;
     }
     let before = Usage::read_process(&daemon.0.id().to_string())?;
     let mut latencies = Vec::with_capacity(50_000);
+    let mut failures = Failures::default();
+    let start = Instant::now();
+    let mut consecutive_errors = 0;
     for id in 0..50_000 {
         request.metadata.id = id as u16;
         let begin = Instant::now();
-        exchange(&client, &request, &mut buffer, case.code).await?;
-        latencies.push(begin.elapsed().as_secs_f64() * 1e6);
+        match exchange(&client, &request, &mut buffer, case).await {
+            Ok(()) => {
+                latencies.push(begin.elapsed().as_secs_f64() * 1e6);
+                consecutive_errors = 0;
+            }
+            Err(error) => {
+                failures.record(error.as_ref())?;
+                consecutive_errors += 1;
+                if consecutive_errors == 16 {
+                    break;
+                }
+            }
+        }
     }
+    let seconds = start.elapsed().as_secs_f64();
     let after = Usage::read_process(&daemon.0.id().to_string())?;
     latencies.sort_by(f64::total_cmp);
     let cpu_ms = after.cpu_ticks.saturating_sub(before.cpu_ticks) as f64 * 1000.0 / ticks;
-    Ok(format!(
-        "{},{:.2},{:.2},{cpu_ms:.1},{:.3},{},{}",
-        case.name,
-        latencies[25_000],
-        latencies[47_500],
-        cpu_ms * 1000.0 / 50_000.0,
-        before.rss_kib,
-        after.rss_kib
+    let samples = latencies.len();
+    Ok((
+        format!(
+            "{},{samples},{},{},{},{},{seconds:.3},{:.2},{:.2},{:.2},{:.2},{cpu_ms:.1},{:.3},{},{},{}",
+            case.name,
+            failures.total(),
+            failures.timeouts,
+            failures.invalid,
+            failures.transport,
+            samples as f64 / seconds,
+            percentile(&latencies, 50),
+            percentile(&latencies, 95),
+            percentile(&latencies, 99),
+            if samples == 0 {
+                f64::NAN
+            } else {
+                cpu_ms * 1000.0 / samples as f64
+            },
+            before.rss_kib,
+            after.rss_kib,
+            after.high_water_kib
+        ),
+        failures.total() != 0,
     ))
 }
 
@@ -142,16 +178,46 @@ async fn exchange(
     socket: &UdpSocket,
     request: &Message,
     buffer: &mut [u8],
-    code: ResponseCode,
+    case: &Case,
 ) -> TestResult {
     socket.send(&request.to_vec()?).await?;
     let length = timeout(Duration::from_secs(3), socket.recv(buffer)).await??;
     let response = Message::from_vec(&buffer[..length])?;
-    assert_eq!(response.id, request.id);
-    assert_eq!(response.queries, request.queries);
-    assert_eq!(response.response_code, code);
-    if code == ResponseCode::NoError {
-        assert!(!response.answers.is_empty());
+    let expected = if case.code != ResponseCode::NoError {
+        Vec::new()
+    } else if matches!(
+        case.name,
+        "local_exact" | "local_wildcard" | "advanced_rewrite"
+    ) {
+        vec![Record::from_rdata(
+            request.queries[0].name().clone(),
+            60,
+            RData::A(hickory_proto::rr::rdata::A("192.0.2.42".parse()?)),
+        )]
+    } else {
+        self::response(request).answers
+    };
+    if response.id != request.id
+        || response.queries != request.queries
+        || response.response_code != case.code
+        || response.answers.len() != expected.len()
+        || !response
+            .answers
+            .iter()
+            .zip(&expected)
+            .all(|(actual, expected)| {
+                actual.name == expected.name
+                    && actual.dns_class == expected.dns_class
+                    && actual.data == expected.data
+                    && actual.ttl > 0
+                    && actual.ttl <= expected.ttl
+            })
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "réponse DNS du benchmark invalide",
+        )
+        .into());
     }
     Ok(())
 }
@@ -162,7 +228,9 @@ async fn dns_filtering() -> TestResult {
     if cfg!(debug_assertions) {
         return Err(io::Error::other("exécuter avec --release").into());
     }
-    let current = PathBuf::from(env!("CARGO_BIN_EXE_light-dns"));
+    let current = std::env::var_os("LIGHT_DNS_BENCH_BINARY")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(env!("CARGO_BIN_EXE_light-dns")));
     let before = std::env::var_os("LIGHT_DNS_BENCH_COMPARE_BINARY").map(PathBuf::from);
     let mut base = String::new();
     for index in 0..100_000 {
@@ -170,6 +238,30 @@ async fn dns_filtering() -> TestResult {
     }
     let ticks = ticks_per_second()?;
     let cases = [
+        Case {
+            name: "local_exact",
+            query: "local.example.",
+            advanced: false,
+            cached: false,
+            kind: RecordType::A,
+            code: ResponseCode::NoError,
+        },
+        Case {
+            name: "local_wildcard",
+            query: "deep.host.home.arpa.",
+            advanced: false,
+            cached: false,
+            kind: RecordType::A,
+            code: ResponseCode::NoError,
+        },
+        Case {
+            name: "user_allowlist",
+            query: "safe.block50000.example.",
+            advanced: false,
+            cached: true,
+            kind: RecordType::A,
+            code: ResponseCode::NoError,
+        },
         Case {
             name: "simple_miss",
             query: "clean.example.",
@@ -235,32 +327,58 @@ async fn dns_filtering() -> TestResult {
             code: ResponseCode::NXDomain,
         },
     ];
-    let output = PathBuf::from("target/benchmarks/filtering.csv");
+    let output = std::env::var_os("LIGHT_DNS_BENCH_CSV")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("target/benchmarks/filtering.csv"));
     fs::create_dir_all(
         output
             .parent()
             .ok_or_else(|| io::Error::other("chemin CSV invalide"))?,
     )?;
     let mut csv = String::from(
-        "variant,trial,scenario,p50_us,p95_us,cpu_ms,cpu_us_per_query,rss_before_kib,rss_after_kib\n",
+        "variant,trial,scenario,samples,errors,timeouts,invalid,transport_errors,seconds,qps,p50_us,p95_us,p99_us,cpu_ms,cpu_us_per_query,rss_before_kib,rss_after_kib,process_hwm_kib\n",
     );
+    fs::write(&output, &csv)?;
+    let error_file = output.with_extension("error.txt");
+    if error_file.exists() {
+        fs::remove_file(error_file)?;
+    }
     for trial in 1..=5 {
         for case in &cases {
             let mut variants = vec![("current", current.as_path())];
-            if !case.advanced
-                && case.name != "cname_blocked"
-                && let Some(before) = &before
-            {
+            if let Some(before) = &before {
                 variants.push(("before", before.as_path()));
             }
             if trial % 2 == 0 {
                 variants.reverse();
             }
             for (variant, binary) in variants {
-                let row = measure(binary, case, &base, ticks).await?;
+                let (row, failed) = match measure(binary, case, &base, ticks).await {
+                    Ok(row) => row,
+                    Err(error) => {
+                        fs::write(
+                            output.with_extension("error.txt"),
+                            format!(
+                                "INCOMPLETE variant={variant} scenario={} trial={trial}: {error}\n",
+                                case.name
+                            ),
+                        )?;
+                        return Err(error);
+                    }
+                };
                 println!("{variant},{trial},{row}");
                 writeln!(csv, "{variant},{trial},{row}")?;
                 fs::write(&output, &csv)?;
+                // Une ligne avec erreurs reste disponible, mais invalide la campagne.
+                if failed {
+                    fs::write(
+                        output.with_extension("error.txt"),
+                        format!("INCOMPLETE variant={variant} trial={trial}: {row}\n"),
+                    )?;
+                    return Err(
+                        io::Error::other("erreurs DNS pendant le benchmark ; voir CSV").into(),
+                    );
+                }
             }
         }
     }

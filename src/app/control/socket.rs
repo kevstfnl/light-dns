@@ -27,29 +27,8 @@ impl Listener {
         let mut lock_path = path.as_os_str().to_owned();
         lock_path.push(".lock");
         let lock_path = PathBuf::from(lock_path);
-        if let Ok(metadata) = fs::symlink_metadata(&lock_path)
-            && !metadata.file_type().is_file()
-        {
-            return Err(io::Error::other("le verrou doit être un fichier régulier"));
-        }
-        let lock = fs::OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create(true)
-            .truncate(false)
-            .mode(0o600)
-            .open(&lock_path)?;
+        let lock = open_lock(&lock_path, owner)?;
         let identity = lock.metadata()?;
-        let linked = fs::symlink_metadata(&lock_path)?;
-        if !linked.file_type().is_file()
-            || identity.uid() != owner
-            || identity.mode() & 0o077 != 0
-            || identity.ino() != linked.ino()
-            || identity.dev() != linked.dev()
-        {
-            return Err(io::Error::other("identité du verrou modifiée"));
-        }
-        lock.try_lock().map_err(io::Error::other)?;
         if let Ok(metadata) = fs::symlink_metadata(&path) {
             if !metadata.file_type().is_socket() || metadata.uid() != identity.uid() {
                 return Err(io::Error::other("chemin de contrôle existant protégé"));
@@ -113,6 +92,53 @@ impl Drop for Listener {
         }
     }
 }
+
+// Le dossier et ses ancêtres doivent rester sous le contrôle de l'utilisateur
+// du service/root. Le contrôle du parent rejette les erreurs usuelles (/tmp).
+fn open_lock(path: &std::path::Path, owner: u32) -> io::Result<fs::File> {
+    let parent = path
+        .parent()
+        .filter(|path| !path.as_os_str().is_empty())
+        .unwrap_or(std::path::Path::new("."));
+    let directory = fs::metadata(parent)?;
+    if !directory.is_dir()
+        || (directory.uid() != owner && directory.uid() != 0)
+        || directory.mode() & 0o022 != 0
+    {
+        return Err(io::Error::other(
+            "le dossier de contrôle doit être maîtrisé et non modifiable par le groupe ou les autres",
+        ));
+    }
+    if let Ok(metadata) = fs::symlink_metadata(path)
+        && !metadata.file_type().is_file()
+    {
+        return Err(io::Error::other("le verrou doit être un fichier régulier"));
+    }
+    let lock = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .mode(0o600)
+        .open(path)?;
+    let identity = lock.metadata()?;
+    let linked = fs::symlink_metadata(path)?;
+    if !linked.file_type().is_file()
+        || identity.uid() != owner
+        || identity.mode() & 0o077 != 0
+        || identity.nlink() != 1
+        || identity.ino() != linked.ino()
+        || identity.dev() != linked.dev()
+    {
+        return Err(io::Error::other("identité du verrou modifiée"));
+    }
+    lock.try_lock().map_err(io::Error::other)?;
+    Ok(lock)
+}
+
+#[cfg(test)]
+#[path = "../../../tests/app/control/locking.rs"]
+mod tests;
 
 pub(super) async fn read_frame(stream: &mut UnixStream, maximum: usize) -> io::Result<Vec<u8>> {
     let mut frame = Vec::with_capacity(maximum);

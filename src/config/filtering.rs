@@ -7,6 +7,8 @@ use std::{collections::HashSet, path::PathBuf, time::Duration};
 pub struct FilterSource {
     pub name: String,
     pub url: String,
+    /// Autorise la famille `$dnsrewrite` pour cette source HTTPS uniquement.
+    pub allow_dnsrewrite: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -30,8 +32,8 @@ impl Default for FilteringConfig {
             allowlist_files: Vec::new(),
             allowlist: Vec::new(),
             sources: vec![
-                FilterSource { name: "adguard-dns".into(), url: "https://adguardteam.github.io/HostlistsRegistry/assets/filter_1.txt".into() },
-                FilterSource { name: "peter-lowe".into(), url: "https://pgl.yoyo.org/adservers/serverlist.php?hostformat=hosts&showintro=0&mimetype=plaintext".into() },
+                FilterSource { name: "adguard-dns".into(), url: "https://adguardteam.github.io/HostlistsRegistry/assets/filter_1.txt".into(), allow_dnsrewrite: false },
+                FilterSource { name: "peter-lowe".into(), url: "https://pgl.yoyo.org/adservers/serverlist.php?hostformat=hosts&showintro=0&mimetype=plaintext".into(), allow_dnsrewrite: false },
             ],
             cache_dir: "data/filters".into(),
             update_interval: Duration::from_secs(86400),
@@ -69,6 +71,8 @@ pub(super) struct RawFilteringConfig {
 struct RawSource {
     name: String,
     url: String,
+    #[serde(default)]
+    allow_dnsrewrite: bool,
 }
 
 impl Default for RawFilteringConfig {
@@ -85,6 +89,7 @@ impl Default for RawFilteringConfig {
                 .map(|source| RawSource {
                     name: source.name,
                     url: source.url,
+                    allow_dnsrewrite: source.allow_dnsrewrite,
                 })
                 .collect(),
             cache_dir: defaults.cache_dir,
@@ -170,9 +175,13 @@ impl RawFilteringConfig {
                         "URL HTTP(S) absolue requise, sans identifiants ni fragment",
                     ));
                 }
+                if source.allow_dnsrewrite && url.scheme() != "https" {
+                    return Err(invalid(&field, "allow_dnsrewrite exige une URL HTTPS"));
+                }
                 Ok(FilterSource {
                     name: source.name,
                     url: url.to_string(),
+                    allow_dnsrewrite: source.allow_dnsrewrite,
                 })
             })
             .collect::<Result<_, _>>()?;

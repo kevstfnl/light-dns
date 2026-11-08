@@ -23,6 +23,12 @@ pub(crate) struct FilterIndex {
     count: usize,
 }
 
+pub(super) struct FilterList {
+    pub text: String,
+    pub allow: bool,
+    pub allow_dnsrewrite: bool,
+}
+
 pub(crate) enum Decision {
     Pass,
     Allow,
@@ -34,17 +40,19 @@ pub(crate) enum Decision {
 }
 
 impl FilterIndex {
-    pub(super) fn compile(texts: &[(String, bool)], allowlist: &[Name]) -> io::Result<Self> {
+    pub(super) fn compile(texts: &[FilterList], allowlist: &[Name]) -> io::Result<Self> {
         let mut rules = HashMap::new();
         let mut simple = HashSet::new();
         let mut disabled_simple = HashSet::new();
         let mut disabled = HashSet::new();
         let mut ignored = 0;
-        for (text, allow) in texts {
-            let parsed = parser::parse(text, *allow)?;
+        let mut untrusted_rewrites = 0;
+        for list in texts {
+            let parsed = parser::parse(&list.text, list.allow, list.allow_dnsrewrite)?;
             if parsed.rules.is_empty()
                 && parsed.simple.is_empty()
                 && parsed.disabled.is_empty()
+                && parsed.untrusted_rewrites == 0
                 && parsed.ignored != 0
             {
                 return Err(io::Error::new(
@@ -53,6 +61,7 @@ impl FilterIndex {
                 ));
             }
             ignored += parsed.ignored;
+            untrusted_rewrites += parsed.untrusted_rewrites;
             for rule in parsed.rules {
                 let order = rules.len();
                 rules.entry(rule).or_insert(order);
@@ -149,6 +158,12 @@ impl FilterIndex {
             tracing::warn!(
                 ignored,
                 "règles incompatibles avec le filtrage DNS ignorées"
+            );
+        }
+        if untrusted_rewrites != 0 {
+            tracing::warn!(
+                untrusted_rewrites,
+                "règles dnsrewrite distantes ignorées : source non autorisée"
             );
         }
         Ok(index)

@@ -163,3 +163,112 @@ async fn concurrent_startup_keeps_one_control_socket_owner() -> TestResult {
     }
     Ok(())
 }
+
+#[tokio::test]
+async fn homelab_keeps_local_zones_filters_and_persisted_lists_across_crashes() -> TestResult {
+    use hickory_proto::op::ResponseCode;
+    use std::sync::atomic::Ordering;
+    let healthy = Upstream::start(answer, answer).await?;
+    let silent = UdpSocket::bind("127.0.0.1:0").await?;
+    let mut daemon = Daemon::new(healthy.address).await?;
+    let cache = daemon.directory.0.join("filters");
+    tokio::fs::create_dir(&cache).await?;
+    let persisted = "! light-dns source https://lists.invalid/list\nremote.block.test\n||redirect.test^$dnsrewrite=192.0.2.99\n";
+    tokio::fs::write(cache.join("remote.txt"), persisted).await?;
+    tokio::fs::write(daemon.directory.0.join("block.txt"), "ads.test\n").await?;
+    let config = format!(
+        "[dns]\nlisten = '{}'\nupstreams = ['{}', '{}']\nupstream_timeout_ms = 100\n[rewrites]\n'*.home.arpa' = '192.168.1.10'\n'router.home.arpa' = '192.168.1.1'\n[filtering]\ncache_dir = 'filters'\nblocklists = ['block.txt']\nallowlist = ['safe.ads.test']\nsources = [{{name = 'remote', url = 'https://lists.invalid/list'}}]\n",
+        daemon.address,
+        silent.local_addr()?,
+        healthy.address
+    );
+    daemon.replace_config(&config).await?;
+    assert!(daemon.command(&["reload"]).await?.status.success());
+    for name in [
+        "router.home.arpa.",
+        "nas.home.arpa.",
+        "deep.host.home.arpa.",
+        "home.arpa.",
+        "ads.test.",
+        "remote.block.test.",
+    ] {
+        udp(daemon.address, &query(name)?).await?;
+    }
+    assert_eq!(healthy.hits.load(Ordering::SeqCst), 0);
+    let mut bytes = [0; 4096];
+    assert!(
+        matches!(silent.try_recv_from(&mut bytes), Err(error) if error.kind() == std::io::ErrorKind::WouldBlock)
+    );
+    // Déclencher la bascule puis vérifier que le cache évite tout nouvel échange.
+    for _ in 0..2 {
+        assert_eq!(
+            address(&udp(daemon.address, &query("public.test.")?).await?.0),
+            "192.0.2.10"
+        );
+    }
+    assert_eq!(healthy.hits.load(Ordering::SeqCst), 1);
+    let mut clients = tokio::task::JoinSet::new();
+    for (name, expected) in [
+        ("router.home.arpa.", "192.168.1.1"),
+        ("nas.home.arpa.", "192.168.1.10"),
+        ("safe.ads.test.", "192.0.2.10"),
+        ("redirect.test.", "192.0.2.10"),
+    ] {
+        let endpoint = daemon.address;
+        clients.spawn(async move {
+            assert_eq!(address(&udp(endpoint, &query(name)?).await?.0), expected);
+            TestResult::Ok(())
+        });
+    }
+    while let Some(result) = clients.join_next().await {
+        result??;
+    }
+    for name in ["ads.test.", "remote.block.test."] {
+        assert_eq!(
+            udp(daemon.address, &query(name)?).await?.0.response_code,
+            ResponseCode::NXDomain
+        );
+    }
+    let mut tcp = TcpStream::connect(daemon.address).await?;
+    write_tcp(&mut tcp, &query("nas.home.arpa.")?).await?;
+    assert_eq!(address(&read_tcp(&mut tcp).await?), "192.168.1.10");
+    daemon
+        .replace_config(&config.replace("192.168.1.10", "192.168.1.20"))
+        .await?;
+    assert!(daemon.command(&["reload"]).await?.status.success());
+    write_tcp(&mut tcp, &query("nas.home.arpa.")?).await?;
+    assert_eq!(address(&read_tcp(&mut tcp).await?), "192.168.1.20");
+    drop(tcp);
+    for _ in 0..3 {
+        daemon.child.kill()?;
+        daemon.child.wait()?;
+        daemon.child = Command::new(env!("CARGO_BIN_EXE_light-dns"))
+            .current_dir(&daemon.directory.0)
+            .args(["--config", "settings.toml", "--socket", "admin.sock"])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()?;
+        let until = tokio::time::Instant::now() + Duration::from_secs(5);
+        while !daemon.command(&["health"]).await?.status.success() {
+            assert!(daemon.child.try_wait()?.is_none());
+            assert!(tokio::time::Instant::now() < until);
+            sleep(Duration::from_millis(10)).await;
+        }
+        assert_eq!(
+            address(&udp(daemon.address, &query("nas.home.arpa.")?).await?.0),
+            "192.168.1.20"
+        );
+        assert_eq!(
+            udp(daemon.address, &query("remote.block.test.")?)
+                .await?
+                .0
+                .response_code,
+            ResponseCode::NXDomain
+        );
+        assert_eq!(
+            tokio::fs::read_to_string(cache.join("remote.txt")).await?,
+            persisted
+        );
+    }
+    Ok(())
+}

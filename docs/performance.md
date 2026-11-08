@@ -122,3 +122,65 @@ Le benchmark historique cache/rewrites a aussi été exécuté cinq fois avant/a
 La campagne forwarding n’est **pas validée** : le premier passage a été interrompu par `EPERM` côté client pendant la comparaison à 32 clients. La tentative réduite à un client a également fini sur `EPERM`, après des réponses en erreur sous charge (notamment fallback/failover). Ces réponses ne sont pas comptées comme réussies. Les causes de tous les SERVFAIL précédant le refus système n’ont pas été établies ; aucun gain de débit, CPU ou de latence de bascule n’est retenu à partir de cette campagne. Les journaux `reliability-forwarding.log`, `reliability-forwarding-single.log` et leurs CSV partiels restent disponibles. Aucun paramètre réseau de l’hôte n’a été changé.
 
 Les tests fonctionnels couvrent séparément les transports, la saturation, le timeout partagé, les upstreams silencieux, leur reprise et la disponibilité des réponses locales. Ils ne remplacent pas une campagne soutenue réussie. La validation à forte charge et la validation ARM64/Raspberry Pi restent ouvertes.
+
+
+## Audit final : mesures disponibles et limites
+
+La référence originale est le commit `8a04a59b2846090023c6cc73f59fb38feed2543a`. Son binaire release a été conservé **avant modification** sous `target/benchmarks/final-audit/original-light-dns`, puis la version sécurisée sous `secured-light-dns`. Les identifiants, versions et SHA-256 figurent dans `reference.txt`. Ces artefacts sont locaux, ignorés par Git ; conserver une copie avec les CSV avant de nettoyer `target/`.
+
+Les trois benchmarks réseau ont été tentés en release avec lockfile : cache historique, filtrage A/B, forwarding A/B. Tous s’arrêtent sur `EPERM` dès la création d’une fixture loopback, avant toute mesure. Les journaux `cache.log`, `filtering.log`, `forwarding.log` et les marqueurs `*.error.txt` se trouvent dans ce dossier. Les scénarios exact/wildcard, blocage simple/avancé, allowlist, cache chaud, miss UDP, TCP, fallback, failover, CNAME et concurrence **ne sont pas validés** dans cette campagne. Aucun réglage système, droit de socket ou accès Docker n’a été modifié pour contourner ces refus.
+
+| Mesure DNS | Avant | Après |
+| --- | --- | --- |
+| p50 / p95 / p99 | non mesurés | non mesurés |
+| CPU par réponse | non mesuré | non mesuré |
+| RSS du démon DNS | non mesurée | non mesurée |
+| Débit / erreurs sous charge | non mesurés | non mesurés |
+
+Les chiffres historiques plus haut ne remplacent pas cette référence : le protocole et le code ont évolué et ces campagnes n’avaient pas de p99. **Aucune optimisation du chemin DNS n’est conservée ni aucun gain annoncé.**
+
+### Instrumentation de la prochaine campagne DNS
+
+Les CSV du cache, du filtrage et du forwarding incluent désormais p99. Les benchmarks avec démon séparé ajoutent `qps`, `process_hwm_kib` (maximum global Linux, démarrage compris), les erreurs de transport, réponses invalides et timeouts. Les percentiles ne portent que sur les réponses réussies ; le CPU par réponse réussie inclut aussi le CPU dépensé sur les échecs. Ces colonnes doivent toujours être lues ensemble. Les mesures restent en boucle fermée : elles ne constituent pas une mesure sous débit d’arrivée imposé et peuvent sous-représenter la queue d’un trafic réel saturé.
+
+Le filtrage ajoute rewrite TOML exact/wildcard et allowlist aux huit cas existants ; il vérifie aussi noms, classes, données et TTL attendus. Il conserve 100 échanges d’échauffement, 50000 tentatives par essai et cinq essais alternés. Une erreur à l’échauffement arrête la campagne avec diagnostic ; les erreurs de mesure sont comptées, avec arrêt anticipé après 16 erreurs consécutives. La ligne partielle est conservée et la campagne échoue. Le forwarding compte séparément ses erreurs d’échauffement ; une campagne terminée avec erreurs échoue aussi, sans effacer ses lignes. Un refus système interrompt la campagne et crée un marqueur `INCOMPLETE` : aucune extrapolation des scénarios non exécutés.
+
+Le forwarding conserve les niveaux 1, 32 et 256, l’échauffement de 2 s et les essais de 10 s. `cold_failover_us` mesure une première requête de bascule avant l’échauffement ; elle est distincte du p99 en régime établi et vaut `NaN` hors scénario failover. La phase établie inclut les sondes déclenchées par le trafic après expiration de l’exclusion. La reprise après rétablissement et les ressources restent à vérifier avec les tests fonctionnels et une charge soutenue autorisée.
+
+Les deux benchmarks avec démon acceptent `LIGHT_DNS_BENCH_BINARY`, `LIGHT_DNS_BENCH_COMPARE_BINARY` et `LIGHT_DNS_BENCH_CSV`. Attention : le forwarding nomme ces binaires `before`/`candidate`, le filtrage `current`/`before` dans ses lignes. Tous les cas de filtrage sont désormais comparés ; utiliser une référence possédant les fonctions avancées. Compiler tous les exécutables avant de mesurer, ne lancer aucune compilation ni validation Docker en parallèle, puis conserver les résultats de cinq essais complets.
+
+### Mémoire du chargement et des reconstructions, sans réseau
+
+Un test ignoré permet de mesurer le chargement des listes sans ouvrir le DNS ni le contrôle Unix :
+
+```bash
+cargo test --release --locked --lib filtering::memory::filtering_memory -- --ignored --nocapture --test-threads=1
+LIGHT_DNS_MEMORY_DOMAINS=450000 LIGHT_DNS_MEMORY_CSV=target/benchmarks/memory-large.csv cargo test --release --locked --lib filtering::memory::filtering_memory -- --ignored --nocapture --test-threads=1
+# Facultatif : corpus local figé et conservé avec son SHA-256, limite 16 Mio.
+LIGHT_DNS_MEMORY_FILE=/chemin/liste.txt cargo test --release --locked --lib filtering::memory::filtering_memory -- --ignored --nocapture --test-threads=1
+```
+
+Par défaut : 100000 domaines et 1000 motifs, puis cinq reconstructions avec coexistence de l’ancien et du nouvel index. Le grand cas utilise 450000 domaines et les mêmes 1000 motifs, dans les limites du projet. Les étapes donnent temps cumulé, CPU cumulé (ticks Linux), RSS et VmHWM. Les références faibles vérifient à chaque reconstruction que l’ancien index est effectivement détruit après libération de ses propriétaires. La RSS peut rester élevée malgré cette destruction : elle inclut la rétention de l’allocateur. VmRSS/VmHWM sont des estimations noyau ; le maximum rapporté ci-dessous prend le maximum des deux sur toutes les étapes, sans prétendre à un pic instantané exact.
+
+Comparaison retenue : deux exécutables ne contenant que ce même module de mesure, l’un sur le code original et l’autre sur le code sécurisé ; cinq essais A/B alternés par corpus, sans build concurrent. Même Rust 1.99.1, profil release, dépendances verrouillées et Linux AMD64. Les premières calibrations utilisant des inventaires de tests différents ne servent pas à cette comparaison. Les sources instrumentées temporaires sont identifiées dans `original-memory-source.txt` et `secured-memory-source.txt`. Aucun changement de production n’est ajouté à la référence originale.
+
+Médianes des cinq essais (Kio ; maximum sur le chargement et les cinq reconstructions) :
+
+| Corpus | Chargement ms avant → après | CPU chargement ms avant → après | RSS chargée Kio avant → après | Maximum RSS/HWM Kio avant → après | RSS après 5 reconstructions Kio avant → après |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 100000 domaines + 1000 motifs | 83,82 → 82,72 | 70 → 70 | 36084 → 37188 | 76648 → 77764 | 75612 → 76728 |
+| 450000 domaines + 1000 motifs | 334,47 → 350,24 | 340 → 350 | 100184 → 100824 | 242172 → 251900 | 151328 → 161188 |
+
+Le CPU médian cumulé des six compilations est de 470 → 480 ms et 2010 → 2090 ms respectivement. Le grand corpus montre un maximum supérieur d’environ 4 % et une RSS finale supérieure d’environ 6,5 % après sécurisation ; ce surcoût observé reste signalé, sans être attribué avec certitude à une allocation précise. Ce n’est ni un gain ni une validation d’absence universelle de régression. Les anciens index sont libérés dans les 20 exécutions retenues ; cela ne prouve pas l’absence de toute autre fuite du démon sous charge.
+
+Les CSV `memory-matched-*.csv`, journaux et `memory-summary.csv` sont sous `target/benchmarks/final-audit/`. Ces chiffres concernent **le chargeur de filtres dans un processus de test**, sans serveur DNS, cache Moka rempli, clients ou requêtes en vol. Les corpus sont synthétiques, aucun corpus de production local n’était disponible. Ils montrent pourquoi il faut dimensionner sur le pic de reload, pas seulement sur la RSS au repos. Ils ne valident pas Raspberry Pi/ARM64/Alpine. L’allocateur n’a pas été instrumenté et aucun comptage d’allocations n’est annoncé.
+
+### Pistes examinées et décision
+
+- Handler : chargements ArcSwap, clones de questions/réponses et recontrôle des filtres après attente. Préserver les générations et le contrôle CNAME ; aucun raccourci non mesuré.
+- Filtrage : `PatternSet` alloué par recherche avancée, deux conversions de chaîne, vecteurs/tri/déduplication et parcours d’ancêtres. Aucun scratch global verrouillé ni nouvel index spéculatif.
+- Compilation : copies de textes dans `publish`, tables temporaires et coexistence d’index. Le partage immuable des textes reste une piste, sans changement conservé faute de comparaison démontrant un gain.
+- Cache : clé clonée, décodage Hickory au hit, copie puis sérialisation à l’insertion ; conserver Moka et les règles TTL/DNSSEC.
+- Forwarding/Tokio : transports par échange, sondes et mutex limité à leur gestion ; aucun provider partagé, pool maison ou réglage de workers réintroduit.
+
+Reprendre les A/B de latence sur un environnement autorisé avant de sélectionner un candidat. Le critère reste un gain supérieur à la variance et d’au moins 5 % dans quatre essais sur cinq, sans hausse répétée supérieure à 5 % de p95/p99/CPU/RAM ni erreur supplémentaire. Les corrections de sécurité restent nécessaires indépendamment d’un gain de performance.

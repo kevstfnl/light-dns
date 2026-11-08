@@ -13,6 +13,7 @@ async fn start_remote(
     config.filtering.sources = vec![FilterSource {
         name: "test".into(),
         url: url.into(),
+        allow_dnsrewrite: false,
     }];
     config.filtering.update_interval = Duration::from_secs(interval);
     config.filtering.download_timeout = Duration::from_secs(1);
@@ -43,6 +44,7 @@ async fn first_start_serves_local_rules_then_activates_the_remote_list() -> Test
     config.filtering.sources = vec![FilterSource {
         name: "test".into(),
         url: http.url.clone(),
+        allow_dnsrewrite: false,
     }];
     let (mut server, address) = bind(config).await?;
     wait_for_hit(&http, 1).await;
@@ -72,6 +74,7 @@ async fn unavailable_first_download_preserves_local_filtering_and_dns_service() 
     config.filtering.sources = vec![FilterSource {
         name: "test".into(),
         url: http.url.clone(),
+        allow_dnsrewrite: false,
     }];
     config.filtering.update_interval = Duration::from_secs(1);
     let (mut server, address) = bind(config).await?;
@@ -289,6 +292,7 @@ async fn remote_badfilter_only_list_can_disable_a_local_rule() -> TestResult {
     config.filtering.sources = vec![FilterSource {
         name: "test".into(),
         url: http.url.clone(),
+        allow_dnsrewrite: false,
     }];
     let (mut server, address) = bind(config).await?;
     wait_for_code(address, "ads.test.", ResponseCode::NoError).await?;
@@ -308,6 +312,7 @@ async fn rejected_combined_update_keeps_the_previous_disk_cache_and_recovers() -
     config.filtering.sources = vec![FilterSource {
         name: "test".into(),
         url: http.url.clone(),
+        allow_dnsrewrite: false,
     }];
     config.filtering.update_interval = Duration::from_secs(1);
     let (mut server, address) = bind(config).await?;
@@ -334,6 +339,102 @@ async fn rejected_combined_update_keeps_the_previous_disk_cache_and_recovers() -
         tokio::fs::read_to_string(&cache)
             .await?
             .contains("new.test")
+    );
+    server.shutdown_gracefully().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn remote_rewrite_updates_stay_inert_and_keep_ordinary_rules_offline() -> TestResult {
+    let directory = TestDirectory::new()?;
+    let body = "||redirect.test^$dnsrewrite=192.0.2.99\nblocked.test\n@@||safe.blocked.test^\n";
+    let http = HttpServer::new(body).await?;
+    let (mut server, address, _upstream) = start_remote(&directory, &http.url, 1, 8192).await?;
+    wait_for_code(address, "blocked.test.", ResponseCode::NXDomain).await?;
+    let check = |response: Message| {
+        assert_eq!(response.response_code, ResponseCode::NoError);
+        assert_eq!(response.answers[0].data.to_string(), "192.0.2.10");
+    };
+    check(udp(address, &query("redirect.test.")?).await?.0);
+    check(udp(address, &query("safe.blocked.test.")?).await?.0);
+    http.set(
+        200,
+        "||redirect.test^$important,dnsrewrite=REFUSED\nupdated.test\n",
+        true,
+        0,
+    );
+    wait_for_code(address, "updated.test.", ResponseCode::NXDomain).await?;
+    check(udp(address, &query("redirect.test.")?).await?.0);
+    let cache = directory.0.join("cache/test.txt");
+    let saved = tokio::fs::read_to_string(&cache).await?;
+    assert!(saved.contains("dnsrewrite=REFUSED"));
+    server.shutdown_gracefully().await?;
+    let url = http.url.clone();
+    drop(http);
+    let (mut server, address, _upstream) = start_remote(&directory, &url, 86400, 8192).await?;
+    assert_eq!(
+        udp(address, &query("updated.test.")?)
+            .await?
+            .0
+            .response_code,
+        ResponseCode::NXDomain
+    );
+    check(udp(address, &query("redirect.test.")?).await?.0);
+    assert_eq!(tokio::fs::read_to_string(cache).await?, saved);
+    server.shutdown_gracefully().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn reload_revokes_cached_remote_rewrites_but_keeps_toml_priority() -> TestResult {
+    let directory = TestDirectory::new()?;
+    let (mut config, _upstream) = TestServer::config(&directory).await?;
+    let url = "https://lists.invalid/list";
+    tokio::fs::create_dir_all(&config.filtering.cache_dir).await?;
+    tokio::fs::write(config.filtering.cache_dir.join("trusted.txt"), format!("! light-dns source {url}\n||redirect.test^$dnsrewrite=192.0.2.99\n||local.test^$dnsrewrite=192.0.2.99\n")).await?;
+    config.filtering.sources = vec![FilterSource {
+        name: "trusted".into(),
+        url: url.into(),
+        allow_dnsrewrite: true,
+    }];
+    config
+        .rewrites
+        .insert(Name::from_ascii("local.test.")?, "192.168.1.1".parse()?);
+    let mut replacement = Config {
+        dns: light_dns::config::DnsConfig {
+            listen: config.dns.listen,
+            upstreams: config.dns.upstreams.clone(),
+            upstream_timeout: config.dns.upstream_timeout,
+        },
+        rewrites: config.rewrites.clone(),
+        filtering: config.filtering.clone(),
+        cache: config.cache.clone(),
+    };
+    let (mut server, address) = bind(config).await?;
+    for (name, expected) in [
+        ("redirect.test.", "192.0.2.99"),
+        ("local.test.", "192.168.1.1"),
+    ] {
+        assert_eq!(
+            udp(address, &query(name)?).await?.0.answers[0]
+                .data
+                .to_string(),
+            expected
+        );
+    }
+    replacement.filtering.sources[0].allow_dnsrewrite = false;
+    server.control().reload(replacement).await?;
+    assert_eq!(
+        udp(address, &query("redirect.test.")?).await?.0.answers[0]
+            .data
+            .to_string(),
+        "192.0.2.10"
+    );
+    assert_eq!(
+        udp(address, &query("local.test.")?).await?.0.answers[0]
+            .data
+            .to_string(),
+        "192.168.1.1"
     );
     server.shutdown_gracefully().await?;
     Ok(())

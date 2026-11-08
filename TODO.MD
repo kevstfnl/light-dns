@@ -77,6 +77,23 @@ Le builder disponible ne propose que Linux AMD64 ; la procédure ARM64 est docum
 - [x] Revalider Docker AMD64 : healthcheck UDP/TCP, reload, persistance, SIGKILL et arrêt normal.
 - [ ] Reprendre la campagne forwarding soutenue hors de cet environnement : EPERM observé à 32 puis 1 client, réponses en erreur sous charge ; aucune conclusion de débit ni de bascule retenue.
 
+## Audit final avant premier déploiement
+- [x] Interdire par défaut la famille `$dnsrewrite` distante, cache disque compris, sans convertir les règles en blocages.
+- [x] Ajouter `allow_dnsrewrite` par source, exiger HTTPS et préserver les rewrites TOML/locaux, exceptions et `$badfilter` ordinaires.
+- [x] Valider sans socket la matrice de confiance, les redirections, les permissions/verrous et la persistance ; 13 tests internes réussis.
+- [x] Refuser les dossiers de contrôle modifiables par groupe/autres et les verrous à liens multiples.
+- [x] Éviter les collisions avec les temporaires abandonnés après réutilisation de PID ; nouveaux caches Unix mode 0600.
+- [x] Ajouter les intégrations téléchargement/mise à jour/révocation et le scénario homelab avec trois SIGKILL (compilés ; exécution réseau en attente).
+- [x] Instrumenter p99, débit, catégories d’erreurs/timeouts, VmHWM et première bascule avant échauffement.
+- [x] Conserver les références release et réaliser cinq A/B mémoire par corpus (100000/450000 domaines + 1000 motifs), avec vérification de libération des anciens index.
+- [ ] Réexécuter tous les tests réseau : `EPERM` dès les fixtures loopback dans l’environnement présent ; aucun contournement.
+- [ ] Terminer la comparaison DNS p50/p95/p99/CPU/RSS/débit, tous scénarios et concurrences 1/32/256 ; aucune optimisation non mesurée conservée.
+- [ ] Reproduire les pics mémoire et le surcoût observé après sécurisation avec corpus réel, démon complet et reload sous trafic.
+- [ ] Revalider Docker AMD64 (build et intégration) : accès au moteur refusé ; syntaxe Compose validée.
+- [ ] Terminer l’audit exhaustif des dépendances verrouillées : cargo-audit absent et requête OSV bloquée par la résolution DNS de l’environnement.
+
+Rapport et limitations : `docs/audit-final.md`. La validation ARM64/Raspberry Pi/Alpine reste exclusivement manuelle par le mainteneur ; aucune case ARM64 n’a été cochée.
+
 ## Plus tard
 - [ ] Exposer des métriques Prometheus (`/metrics`).
 - [ ] Ajouter le support DNS-over-HTTPS / DNS-over-TLS.

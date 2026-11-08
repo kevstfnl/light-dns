@@ -22,7 +22,9 @@ cache_dir = "/var/lib/light-dns/filters"
 blocklists = [] # Exemple : ["/etc/light-dns/block.txt"]
 allowlist_files = [] # Exemple : ["/etc/light-dns/allow.txt"]
 allowlist = []
-# Sources par défaut : AdGuard DNS et Peter Lowe.
+# Sources par défaut : AdGuard DNS et Peter Lowe, sans $dnsrewrite.
+# Une source HTTPS explicitement déclarée peut utiliser allow_dnsrewrite = true.
+# Les fichiers locaux configurés restent de confiance pour les rewrites.
 # Pour les alternatives commentées HaGeZi/OISD/StevenBlack/AdAway,
 # reprendre les blocs [[filtering.sources]] du config.toml principal.
 # sources = [] # Désactiver les téléchargements, conserver les listes locales.

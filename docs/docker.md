@@ -24,7 +24,7 @@ Compose monte le dossier `docker/` dans `/etc/light-dns` en lecture seule. Monte
 
 Les fichiers doivent être lisibles par l'UID 65532 et les dossiers traversables. Les téléchargements sont stockés dans le volume `filter-data` sous `/var/lib/light-dns/filters`. La racine du conteneur reste en lecture seule ; `/run/light-dns` est un `tmpfs` privé qui contient la socket de contrôle. Un volume déjà créé doit conserver des permissions adaptées à l'UID/GID 65532. Les options de montages, de publication et d'arrêt sont décrites dans la [référence Compose](https://docs.docker.com/reference/compose-file/services/).
 
-Le filtrage distant fonctionne comme sur Linux : un premier démarrage sans cache disque peut répondre avant le chargement des listes. Les téléchargements HTTPS nécessitent une sortie réseau. Les chemins relatifs sont résolus depuis `/run/light-dns` ; privilégier les chemins absolus de l'exemple Docker.
+Le filtrage distant fonctionne comme sur Linux : un premier démarrage sans cache disque peut répondre avant le chargement des listes. Les téléchargements HTTPS nécessitent une sortie réseau. Les rewrites des listes distantes restent désactivés par défaut, même lorsqu’elles sont préchargées dans le volume ; seule une source HTTPS avec `allow_dnsrewrite = true` peut les fournir. Les fichiers locaux montés explicitement sont de confiance pour les rewrites. Les nouveaux caches persistés sont créés en mode `0600` ; conserver le même UID pour les relire. Les chemins relatifs sont résolus depuis `/run/light-dns` ; privilégier les chemins absolus de l'exemple Docker.
 
 ## Commandes et arrêt
 
@@ -84,7 +84,9 @@ cargo test --test integration deployment::docker -- --ignored --nocapture
 
 Ce test explicite nécessite l'accès au moteur Docker et l'image construite. Il crée son propre conteneur et son volume temporaire, sans utiliser le déploiement Compose existant. Il vérifie l'utilisateur non privilégié, les montages, les réponses DNS sur les ports UDP/TCP publiés, la CLI, le rejet d'un reload invalide, une sauvegarde TOML atomique, la conservation d'une connexion TCP et l'arrêt par `SIGTERM` avec un code nul. Il vérifie aussi le healthcheck `health` et un cache distant préchargé dans le volume, retrouvé après redémarrage hors ligne. Les tests HTTP locaux couvrent séparément le téléchargement et la sauvegarde. Il utilise uniquement des réponses locales, sans upstream Internet, et nettoie ses ressources temporaires. Il reste ignoré par `cargo test` normal. `LIGHT_DNS_TEST_IMAGE` permet de choisir un tag de validation dédié sans remplacer une image existante ; le test vérifie et impose Linux AMD64.
 
-La construction et ce test ont été revalidés sur Linux AMD64 le 8 novembre 2026, avec le healthcheck UDP/TCP et un redémarrage après SIGKILL. `docker compose config --quiet` a également validé le fichier Compose fourni.
+Lors de la validation précédente, la construction et ce test ont été revalidés sur Linux AMD64 le 8 novembre 2026, avec le healthcheck UDP/TCP et un redémarrage après SIGKILL. `docker compose config --quiet` a également validé le fichier Compose fourni.
+
+Pour le présent audit final, seul `docker compose config --quiet` a pu être réexécuté : l’accès à `/var/run/docker.sock` est refusé. La construction et le test fonctionnel AMD64 des changements restent donc à reprendre ; la validation précédente ne les couvre pas. Aucun conteneur ou service existant n’a été modifié.
 
 ## Linux ARM64 / Raspberry Pi
 

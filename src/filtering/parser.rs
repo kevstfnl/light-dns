@@ -87,9 +87,10 @@ pub(super) struct Parsed {
     pub rules: Vec<Rule>,
     pub disabled: HashSet<Rule>,
     pub ignored: usize,
+    pub untrusted_rewrites: usize,
 }
 
-pub(super) fn parse(text: &str, allow: bool) -> io::Result<Parsed> {
+pub(super) fn parse(text: &str, allow: bool, allow_dnsrewrite: bool) -> io::Result<Parsed> {
     let mut parsed = Parsed::default();
     let mut unique = HashMap::new();
     let mut conditional_depth = 0usize;
@@ -145,7 +146,13 @@ pub(super) fn parse(text: &str, allow: bool) -> io::Result<Parsed> {
             .map_or(line, |(body, _)| body);
         if classification.contains(['|', '^', '$', '*']) || classification.starts_with("@@") {
             if let Some((rule, disabled)) = adblock(line, allow) {
-                add(rule, disabled);
+                // Retirer la règle entière, y compris exceptions et badfilter :
+                // enlever seulement le modificateur changerait sa sémantique.
+                if !allow_dnsrewrite && rule.rewrite().is_some() {
+                    parsed.untrusted_rewrites += 1;
+                } else {
+                    add(rule, disabled);
+                }
             } else {
                 parsed.ignored += 1;
             }
@@ -186,7 +193,9 @@ pub(super) fn parse(text: &str, allow: bool) -> io::Result<Parsed> {
                 parsed.ignored += 1;
             }
         }
-        if unique.len() + parsed.simple.len() + parsed.disabled.len() > MAX_RULES {
+        if unique.len() + parsed.simple.len() + parsed.disabled.len() + parsed.untrusted_rewrites
+            > MAX_RULES
+        {
             return Err(io::Error::other(
                 "trop de règles dans une liste de filtrage",
             ));

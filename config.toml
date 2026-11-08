@@ -52,14 +52,19 @@ update_interval_secs = 86400 # Relecture des fichiers et mise à jour distante :
 download_timeout_secs = 15
 max_list_bytes = 8388608 # 8 Mio par liste ; maximum configurable : 16 Mio.
 
+# Les fichiers locaux configurés autorisent les rewrites de listes.
+# Sources distantes : famille $dnsrewrite interdite par défaut, cache disque compris.
+# Autorisation explicite par source : allow_dnsrewrite = true exige HTTPS.
 # Sources classiques adaptées au DNS. Remplacer ce tableau pour choisir ses listes.
 # sources = [] désactive les téléchargements ; enabled = false désactive tout filtrage.
 [[filtering.sources]]
 name = "adguard-dns"
+allow_dnsrewrite = false
 url = "https://adguardteam.github.io/HostlistsRegistry/assets/filter_1.txt"
 
 [[filtering.sources]]
 name = "peter-lowe"
+allow_dnsrewrite = false
 url = "https://pgl.yoyo.org/adservers/serverlist.php?hostformat=hosts&showintro=0&mimetype=plaintext"
 
 # Alternatives facultatives : tous les blocs ci-dessous sont désactivés.

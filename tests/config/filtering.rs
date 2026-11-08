@@ -8,6 +8,13 @@ fn enables_classic_dns_lists_by_default_and_accepts_opt_out() -> Result<(), Conf
     assert_eq!(config.filtering.sources.len(), 2);
     assert_eq!(config.filtering.sources[0].name, "adguard-dns");
     assert_eq!(config.filtering.sources[1].name, "peter-lowe");
+    assert!(
+        config
+            .filtering
+            .sources
+            .iter()
+            .all(|source| !source.allow_dnsrewrite)
+    );
     assert_eq!(config.filtering.update_interval, Duration::from_secs(86400));
     let disabled = Config::from_toml(&format!(
         "{}\n[filtering]\nenabled = false\nsources = []",
@@ -40,6 +47,8 @@ fn validates_filter_paths_exceptions_sources_and_resource_bounds() {
         "sources = [{ name = 'bad', url = 'https://example.test/list#fragment' }]",
         "sources = [{ name = 'same', url = 'https://a.test/' }, { name = 'same', url = 'https://b.test/' }]",
         "sources = [{ name = 'bad', url = 'relative/path' }]",
+        "sources = [{ name = 'bad', url = 'http://example.test/list', allow_dnsrewrite = true }]",
+        "sources = [{ name = 'bad', url = 'https://example.test/list', allow_dnsrewrite = 'yes' }]",
     ] {
         assert!(
             Config::from_toml(&format!("{}\n[filtering]\n{section}", with_rewrites(&[]))).is_err(),
@@ -56,9 +65,21 @@ fn allows_custom_local_and_remote_sources_and_normalizes_allowlist() -> Result<(
     ))?;
     assert_eq!(config.filtering.allowlist[0].to_ascii(), "safe.example.");
     assert_eq!(config.filtering.sources[0].name, "custom");
+    assert!(!config.filtering.sources[0].allow_dnsrewrite);
     assert_eq!(
         config.filtering.blocklists[0].to_string_lossy(),
         "block.txt"
     );
+    Ok(())
+}
+
+#[test]
+fn trusts_only_explicit_https_sources() -> Result<(), ConfigError> {
+    let config = Config::from_toml(&format!(
+        "{}\n[filtering]\nsources = [{{name = 'trusted', url = 'https://example.test/list', allow_dnsrewrite = true}}, {{name = 'ordinary', url = 'https://other.test/list'}}]",
+        with_rewrites(&[])
+    ))?;
+    assert!(config.filtering.sources[0].allow_dnsrewrite);
+    assert!(!config.filtering.sources[1].allow_dnsrewrite);
     Ok(())
 }

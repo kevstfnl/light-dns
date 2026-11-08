@@ -383,3 +383,90 @@ async fn semantic_failures_do_not_quarantine_a_responsive_upstream() -> TestResu
     server.shutdown_gracefully().await?;
     Ok(())
 }
+
+#[tokio::test]
+async fn tcp_timeout_quarantines_the_silent_primary_for_concurrent_clients() -> TestResult {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+    let silent = TcpListener::bind("127.0.0.1:0").await?;
+    let silent_address = silent.local_addr()?;
+    let healthy = Upstream::start(answer, answer).await?;
+    let hits = Arc::new(AtomicUsize::new(0));
+    let received = hits.clone();
+    let mut fixtures = JoinSet::new();
+    fixtures.spawn(async move {
+        let (mut stream, _) = silent.accept().await?;
+        read_tcp(&mut stream).await?;
+        received.fetch_add(1, Ordering::SeqCst);
+        let _held = stream;
+        std::future::pending::<TestResult>().await
+    });
+    let (mut server, address) = start(vec![silent_address, healthy.address]).await?;
+    let ask = |id| async move {
+        let mut stream = TcpStream::connect(address).await?;
+        let mut request = query("tcp-timeout.test.")?;
+        request.metadata.id = id;
+        write_tcp(&mut stream, &request).await?;
+        let response = timeout(Duration::from_secs(3), read_tcp(&mut stream)).await??;
+        assert_eq!(response.id, id);
+        assert_eq!(response.answers, answer(&request).answers);
+        TestResult::Ok(())
+    };
+    ask(0).await?;
+    let mut clients = JoinSet::new();
+    for id in 1..=8 {
+        clients.spawn(ask(id));
+    }
+    while let Some(result) = clients.join_next().await {
+        result??;
+    }
+    assert_eq!(hits.load(Ordering::SeqCst), 1);
+    assert_eq!(healthy.hits.load(Ordering::SeqCst), 9);
+    assert_eq!(server.control().stats().await.upstream_failures, 1);
+    server.shutdown_gracefully().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn simultaneous_failures_preserve_local_answers_and_a_warm_cache() -> TestResult {
+    let first = UdpSocket::bind("127.0.0.1:0").await?;
+    let second = UdpSocket::bind("127.0.0.1:0").await?;
+    let healthy = Upstream::start(answer, answer).await?;
+    let mut config = test_config(vec![
+        first.local_addr()?,
+        second.local_addr()?,
+        healthy.address,
+    ])?;
+    config.cache = light_dns::config::CacheConfig::default();
+    config.rewrites.insert(
+        Name::from_ascii("local.home.arpa.")?,
+        "192.168.1.1".parse()?,
+    );
+    let (mut server, address) = bind(config).await?;
+    let warm = query("warm.test.")?;
+    assert_eq!(udp(address, &warm).await?.0.answers, answer(&warm).answers);
+    drop(healthy);
+    assert_eq!(
+        udp(address, &query("uncached.test.")?)
+            .await?
+            .0
+            .response_code,
+        ResponseCode::ServFail
+    );
+    let before = server.control().stats().await.forwarded;
+    assert_eq!(
+        udp(address, &query("local.home.arpa.")?).await?.0.answers[0]
+            .data
+            .to_string(),
+        "192.168.1.1"
+    );
+    assert_eq!(
+        udp(address, &warm).await?.0.answers[0].data,
+        answer(&warm).answers[0].data
+    );
+    assert_eq!(server.control().stats().await.forwarded, before);
+    server.shutdown_gracefully().await?;
+    Ok(())
+}

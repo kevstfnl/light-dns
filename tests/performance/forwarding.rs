@@ -1,4 +1,4 @@
-use super::measurement::{Usage, ticks_per_second};
+use super::measurement::{Failures, Usage, percentile, ticks_per_second};
 use crate::support::{TestResult, dns::*, process::TestDirectory};
 use hickory_proto::op::{Message, ResponseCode};
 use std::{
@@ -43,7 +43,7 @@ async fn client(
     tcp: bool,
     barrier: Arc<Barrier>,
     duration: Duration,
-) -> TestResult<(Vec<f64>, usize)> {
+) -> TestResult<(Vec<f64>, Failures)> {
     let socket = UdpSocket::bind("127.0.0.1:0").await?;
     socket.connect(address).await?;
     let mut stream = if tcp {
@@ -56,7 +56,7 @@ async fn client(
     let mut request = query("bench.test.")?;
     let mut buffer = [0; 4096];
     let mut latencies = Vec::new();
-    let mut errors = 0;
+    let mut errors = Failures::default();
     timeout(Duration::from_secs(5), barrier.wait()).await?;
     let until = Instant::now() + duration;
     while Instant::now() < until {
@@ -66,8 +66,13 @@ async fn client(
                     connection.set_nodelay(true)?;
                     stream = Some(connection);
                 }
-                _ => {
-                    errors += 1;
+                Err(_) => {
+                    errors.timeouts += 1;
+                    sleep(Duration::from_millis(10)).await;
+                    continue;
+                }
+                Ok(Err(error)) => {
+                    errors.record(&error)?;
                     sleep(Duration::from_millis(10)).await;
                     continue;
                 }
@@ -107,9 +112,16 @@ async fn client(
                 latencies.push(begin.elapsed().as_secs_f64() * 1e6);
             }
             // Reconnect after TCP I/O errors: a partially read frame cannot be reused.
-            other => {
-                errors += 1;
-                if tcp && !matches!(other, Ok(Ok(_))) {
+            Ok(Ok(_)) => errors.invalid += 1,
+            Ok(Err(error)) => {
+                errors.record(error.as_ref())?;
+                if tcp {
+                    stream = None;
+                }
+            }
+            Err(_) => {
+                errors.timeouts += 1;
+                if tcp {
                     stream = None;
                 }
             }
@@ -123,7 +135,7 @@ async fn load(
     tcp: bool,
     concurrency: usize,
     duration: Duration,
-) -> TestResult<(Vec<f64>, usize, f64)> {
+) -> TestResult<(Vec<f64>, Failures, f64)> {
     let barrier = Arc::new(Barrier::new(concurrency + 1));
     let mut clients = JoinSet::new();
     for _ in 0..concurrency {
@@ -138,11 +150,11 @@ async fn load(
     }
     let start = Instant::now();
     let mut latencies = Vec::new();
-    let mut errors = 0;
+    let mut errors = Failures::default();
     while let Some(result) = clients.join_next().await {
         let (samples, failures) = result??;
         latencies.extend(samples);
-        errors += failures;
+        errors.add(failures);
     }
     Ok((latencies, errors, start.elapsed().as_secs_f64()))
 }
@@ -153,7 +165,7 @@ async fn measure(
     trial: usize,
     binary: &Path,
     ticks: f64,
-) -> TestResult<String> {
+) -> TestResult<(String, bool)> {
     let directory = TestDirectory::new()?;
     let listener = TcpListener::bind("127.0.0.1:0").await?;
     let upstream = listener.local_addr()?;
@@ -243,6 +255,22 @@ async fn measure(
         sleep(Duration::from_millis(10)).await;
     }
     let tcp = matches!(scenario, Scenario::Tcp);
+    // Mesurer la première panne avant que l'échauffement mette le primaire à l'écart.
+    let cold_failover_us = if matches!(scenario, Scenario::Failover) {
+        let request = query("cold.test.")?;
+        let started = Instant::now();
+        let response = udp(address, &request).await?.0;
+        if response.queries != request.queries
+            || response.id != request.id
+            || response.answers != answer(&request).answers
+            || response.response_code != ResponseCode::NoError
+        {
+            return Err(io::Error::other("réponse de bascule initiale invalide").into());
+        }
+        started.elapsed().as_secs_f64() * 1e6
+    } else {
+        f64::NAN
+    };
     let (_, warmup_errors, _) = load(address, tcp, concurrency, Duration::from_secs(2)).await?;
     if let Some(result) = fixtures.try_join_next() {
         result??;
@@ -271,6 +299,8 @@ async fn measure(
         return Err(io::Error::other(format!("daemon arrêté pendant la mesure : {status}")).into());
     }
     let samples = latencies.len();
+    let errors_total = errors.total();
+    let warmup_total = warmup_errors.total();
     let cpu_ms = (after.cpu_ticks - before.cpu_ticks) as f64 * 1000.0 / ticks;
     let cpu_us_per_query = if samples == 0 {
         f64::NAN
@@ -278,18 +308,20 @@ async fn measure(
         cpu_ms * 1000.0 / samples as f64
     };
     let row = format!(
-        "{scenario:?},{concurrency},{trial},{samples},{errors},{warmup_errors},{seconds:.3},{:.2},{:.2},{:.2},{cpu_ms:.1},{:.3},{},{peak},{}\n",
+        "{scenario:?},{concurrency},{trial},{samples},{errors_total},{warmup_total},{seconds:.3},{:.2},{:.2},{:.2},{:.2},{cpu_ms:.1},{:.3},{},{peak},{},{},{},{},{},{cold_failover_us:.2}\n",
         samples as f64 / seconds,
-        latencies.get(samples / 2).copied().unwrap_or(f64::NAN),
-        latencies
-            .get(samples * 95 / 100)
-            .copied()
-            .unwrap_or(f64::NAN),
+        percentile(&latencies, 50),
+        percentile(&latencies, 95),
+        percentile(&latencies, 99),
         cpu_us_per_query,
         before.rss_kib,
-        connections.load(Ordering::Relaxed) - connections_before
+        connections.load(Ordering::Relaxed) - connections_before,
+        after.high_water_kib,
+        errors.timeouts,
+        errors.invalid,
+        errors.transport
     );
-    Ok(row)
+    Ok((row, errors_total != 0 || warmup_total != 0))
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -327,8 +359,14 @@ async fn dns_forwarding() -> TestResult {
         Err(error) => return Err(error.into()),
     };
     let mut csv = String::from(
-        "variant,scenario,concurrency,trial,samples,errors,warmup_errors,seconds,qps,p50_us,p95_us,cpu_ms,cpu_us_per_query,rss_before_kib,rss_peak_kib,tcp_connections\n",
+        "variant,scenario,concurrency,trial,samples,errors,warmup_errors,seconds,qps,p50_us,p95_us,p99_us,cpu_ms,cpu_us_per_query,rss_before_kib,rss_peak_kib,tcp_connections,process_hwm_kib,timeouts,invalid,transport_errors,cold_failover_us\n",
     );
+    fs::write(&output, &csv)?;
+    let error_file = output.with_extension("error.txt");
+    if error_file.exists() {
+        fs::remove_file(&error_file)?;
+    }
+    let mut failed = false;
     for trial in 1..=5 {
         for scenario in [
             Scenario::Udp,
@@ -345,13 +383,40 @@ async fn dns_forwarding() -> TestResult {
                         index
                     };
                     let (variant, binary) = &binaries[index];
-                    let row = measure(scenario, concurrency, trial, binary, ticks).await?;
+                    let (row, has_errors) = match measure(
+                        scenario,
+                        concurrency,
+                        trial,
+                        binary,
+                        ticks,
+                    )
+                    .await
+                    {
+                        Ok(row) => row,
+                        Err(error) => {
+                            fs::write(
+                                output.with_extension("error.txt"),
+                                format!(
+                                    "INCOMPLETE variant={variant} scenario={scenario:?} concurrency={concurrency} trial={trial}: {error}\n"
+                                ),
+                            )?;
+                            return Err(error);
+                        }
+                    };
+                    failed |= has_errors;
                     print!("{variant},{row}");
                     writeln!(csv, "{variant},{}", row.trim_end())?;
                     fs::write(&output, &csv)?;
                 }
             }
         }
+    }
+    if failed {
+        fs::write(
+            error_file,
+            "FAILED : campagne terminée avec erreurs DNS ; voir les compteurs du CSV\n",
+        )?;
+        return Err(io::Error::other("campagne forwarding avec erreurs DNS").into());
     }
     Ok(())
 }

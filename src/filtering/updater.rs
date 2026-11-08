@@ -1,4 +1,8 @@
-use super::{SharedFilters, download, index::FilterIndex, parser};
+use super::{
+    SharedFilters, download,
+    index::{FilterIndex, FilterList},
+    parser,
+};
 use crate::config::{FilterSource, FilteringConfig};
 use std::{
     io,
@@ -57,6 +61,15 @@ impl Updater {
         }
         let mut remotes = Vec::new();
         for source in &config.sources {
+            // Vérifier aussi les configurations construites par l'API Rust.
+            if source.allow_dnsrewrite
+                && !reqwest::Url::parse(&source.url).is_ok_and(|url| url.scheme() == "https")
+            {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "allow_dnsrewrite exige une URL HTTPS",
+                ));
+            }
             let path = config.cache_dir.join(format!("{}.txt", source.name));
             let mut remote = RemoteList {
                 source: source.clone(),
@@ -70,7 +83,9 @@ impl Updater {
                     .strip_prefix(&header)
                     .filter(|text| text.len() <= config.max_list_bytes)
                 {
-                    if let Ok(text) = validate_remote(text.to_owned()).await {
+                    if let Ok(text) =
+                        validate_remote(text.to_owned(), source.allow_dnsrewrite).await
+                    {
                         total += text.len();
                         check_total(total)?;
                         remote.text = Some(text);
@@ -146,7 +161,7 @@ impl Updater {
                         self.config.max_list_bytes,
                     )
                     .await?;
-                    validate_remote(text).await
+                    validate_remote(text, remote.source.allow_dnsrewrite).await
                 }
                 .await;
                 match result {
@@ -195,21 +210,26 @@ impl Updater {
     async fn publish(&mut self) -> io::Result<()> {
         let mut total = 0usize;
         let mut texts = Vec::new();
-        for (text, allow) in self
+        for (text, allow, allow_dnsrewrite) in self
             .files
             .iter()
-            .map(|file| (&file.text, file.allow))
-            .chain(
-                self.remotes
-                    .iter()
-                    .filter_map(|remote| remote.text.as_ref().map(|text| (text, false))),
-            )
+            .map(|file| (&file.text, file.allow, true))
+            .chain(self.remotes.iter().filter_map(|remote| {
+                remote
+                    .text
+                    .as_ref()
+                    .map(|text| (text, false, remote.source.allow_dnsrewrite))
+            }))
         {
             total += text.len();
             if total > MAX_TOTAL_BYTES {
                 return Err(io::Error::other("les listes dépassent 64 Mio au total"));
             }
-            texts.push((text.clone(), allow));
+            texts.push(FilterList {
+                text: text.clone(),
+                allow,
+                allow_dnsrewrite,
+            });
         }
         let allowlist = self.config.allowlist.clone();
         let index = tokio::task::spawn_blocking(move || FilterIndex::compile(&texts, &allowlist))
@@ -242,7 +262,7 @@ impl Updater {
     }
 }
 
-async fn validate_remote(text: String) -> io::Result<String> {
+async fn validate_remote(text: String, allow_dnsrewrite: bool) -> io::Result<String> {
     tokio::task::spawn_blocking(move || {
         if text
             .trim_start_matches('\u{feff}')
@@ -254,8 +274,12 @@ async fn validate_remote(text: String) -> io::Result<String> {
                 "page HTML reçue à la place d'une liste DNS",
             ));
         }
-        let parsed = parser::parse(&text, false)?;
-        if parsed.rules.is_empty() && parsed.simple.is_empty() && parsed.disabled.is_empty() {
+        let parsed = parser::parse(&text, false, allow_dnsrewrite)?;
+        if parsed.rules.is_empty()
+            && parsed.simple.is_empty()
+            && parsed.disabled.is_empty()
+            && parsed.untrusted_rewrites == 0
+        {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
                 "aucune règle DNS compatible dans la liste distante",
