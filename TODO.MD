@@ -19,5 +19,5 @@ Procédures : [maintenance](docs/maintenance.md), [installation et validation Al
 - [x] Compiler et inspecter l’ELF AArch64 musl statique sans l’exécuter ; ne constitue aucune validation ARM64 ou Raspberry Pi. Zig 0.15.2 émet un avertissement bénin sur l’option historique du linker `-O1`.
 - [x] Vérifier sur Alpine AMD64 isolé : OpenRC start/restart/reload/stop, santé UDP/TCP, UID non-root, seule capacité effective CAP_NET_BIND_SERVICE et refus d’installation non-root. Test rendu obligatoire dans le workflow avant publication.
 - [x] CI distante et téléchargements publics de v0.2.0-beta.1 validés ; la vérification manuelle a révélé une collision entre le binaire brut et le dossier extrait. Procédure corrigée dans v0.2.0-beta.2 avec un dossier d’extraction séparé.
-- [ ] Vérifier la CI distante et les téléchargements anonymes de v0.2.0-beta.2.
+- [x] CI complète de v0.2.0-beta.2 réussie (run 43278685338), prerelease publique publiée. Les cinq assets ont été téléchargés anonymement dans une Alpine AMD64 fraîche sans ajout de paquet ; sommes SHA-256, extraction manuelle et correspondance des fichiers vérifiées. `update --check` reconnaît la bêta 2. Aucun binaire ARM exécuté.
 - [ ] Validation physique par le mainteneur : installation sys Alpine AArch64, reboot, mise à jour/rollback et purge interactive sur Raspberry Pi 5. Aucun essai ARM64 effectué.
