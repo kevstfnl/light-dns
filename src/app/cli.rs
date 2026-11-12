@@ -2,7 +2,7 @@ use std::{ffi::OsString, io, path::PathBuf};
 
 pub(super) const HELP: &str = "light-dns [--config CHEMIN] [--socket CHEMIN] [COMMANDE]
 
-Sans commande : démarrer le serveur DNS.
+Gestion Alpine (root pour modifier le système) :\n  install\n  update [--check | --version VERSION]\n  uninstall [--purge]\n  version\n\nSans commande : démarrer le serveur DNS.
   serve        Démarrer le serveur DNS
   cache clear  Vider le cache DNS du serveur actif
   reload       Recharger son fichier TOML, sans changer ses écoutes
@@ -20,6 +20,13 @@ pub(super) enum Command {
     Stats,
     Health(bool),
     Help,
+    Version,
+    Install,
+    Update {
+        check: bool,
+        version: Option<String>,
+    },
+    Uninstall(bool),
 }
 
 pub(super) struct Arguments {
@@ -62,6 +69,29 @@ impl Arguments {
             }
         }
         let command = match words.as_slice() {
+            [one] if one == "version" => Command::Version,
+            [one] if one == "install" => Command::Install,
+            [one] if one == "update" => Command::Update {
+                check: false,
+                version: None,
+            },
+            [one, two] if one == "update" && two == "--check" => Command::Update {
+                check: true,
+                version: None,
+            },
+            [one, two, version] if one == "update" && two == "--version" => Command::Update {
+                check: false,
+                version: Some(
+                    version
+                        .to_str()
+                        .ok_or_else(|| {
+                            io::Error::new(io::ErrorKind::InvalidInput, "version UTF-8 requise")
+                        })?
+                        .to_owned(),
+                ),
+            },
+            [one] if one == "uninstall" => Command::Uninstall(false),
+            [one, two] if one == "uninstall" && two == "--purge" => Command::Uninstall(true),
             [] => Command::Serve,
             [one] if one == "serve" => Command::Serve,
             [one] if one == "reload" => Command::Reload,

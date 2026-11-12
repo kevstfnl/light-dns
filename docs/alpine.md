@@ -1,98 +1,85 @@
-# Alpine Linux aarch64 — Raspberry Pi 5
+# Alpine Linux AArch64 — Raspberry Pi 5
 
-Cette distribution native utilise un binaire Rust musl statique pour Alpine **64 bits** (`uname -m` doit afficher `aarch64`). Rust, Cargo, CMake et Docker ne sont pas nécessaires sur le Pi. Les certificats CA restent nécessaires pour les listes HTTPS.
+Installation prévue pour Alpine 64 bits (`uname -m` : `aarch64`), stockage persistant **sys** et OpenRC. Aucun compilateur n’est requis. Le bootstrap et le binaire utilisent les outils système BusyBox ; HTTPS exige des certificats CA valides. Si le bundle système manque, installer `ca-certificates-bundle` avec `apk`, sans contourner TLS.
 
-## Télécharger et installer
+## Installation rapide
 
-Télécharger l'archive et `SHA256SUMS` depuis la même [release GitHub](https://github.com/kevstfnl/light-dns/releases). Exemple pour la première version publiée :
+Depuis un shell root, utiliser la commande du [README](../README.md#installation-rapide--alpine-linux--raspberry-pi-5). Elle exige une release publique : un brouillon GitHub ne fonctionne pas avec les téléchargements anonymes.
+
+Le bootstrap épinglé télécharge le binaire et `SHA256SUMS`, vérifie la somme du seul binaire attendu dans un dossier temporaire privé, puis lance `light-dns install`. Il nettoie ses téléchargements après succès ou échec. Le script distant s’exécute en root : inspecter sa source et utiliser la méthode suivante si cette confiance n’est pas appropriée.
+
+## Installation manuelle avec vérification
+
+Depuis un shell root :
 
 ```sh
-version=v0.1.0
-archive="light-dns-$version-aarch64-unknown-linux-musl.tar.gz"
+version=v0.2.0-beta.1
 base="https://github.com/kevstfnl/light-dns/releases/download/$version"
-wget "$base/$archive" "$base/SHA256SUMS"
+name="light-dns-$version-aarch64-unknown-linux-musl"
+mkdir -m 700 light-dns-download
+cd light-dns-download
+wget -T 60 "$base/$name.tar.gz" "$base/SHA256SUMS" "$base/bootstrap.sh" "$base/$name" "$base/light-dns.initd"
+cat bootstrap.sh
 sha256sum -c SHA256SUMS
-tar -xzf "$archive"
-cd "light-dns-$version-aarch64-unknown-linux-musl"
-doas sh install.sh
+tar -xzf "$name.tar.gz"
+cat "$name/install.sh"
+cat "$name/light-dns.initd"
+sh "$name/install.sh"
+cd ..
+rm -r light-dns-download
 ```
 
-Utiliser `sudo` ou un shell root si `doas` n'est pas configuré. Ne continuer que si la vérification SHA-256 réussit ; elle détecte une archive corrompue, sans constituer une signature indépendante de GitHub.
+Arrêter immédiatement si la vérification échoue. Comparer aussi la somme publiée via un canal indépendant si disponible ; un manifeste obtenu du même compte GitHub ne protège pas contre la compromission de ce compte. Ne pas utiliser `--no-check-certificate`.
 
-### Première installation depuis le brouillon
+## Service et configuration
 
-Un brouillon n'est accessible qu'aux comptes autorisés. Depuis le poste du mainteneur avec GitHub CLI authentifié et SSH vers le Pi :
+Le service est activé dans le runlevel `default` et démarre automatiquement à la première installation. L’écoute initiale est uniquement `127.0.0.1:53`, en UDP et TCP. Un conflit sur ce port fait échouer l’installation et déclenche le rollback ; aucune configuration réseau n’est modifiée.
 
 ```sh
-gh release download v0.1.0 --repo kevstfnl/light-dns --dir release-v0.1.0 \
-  --pattern '*.tar.gz' --pattern SHA256SUMS
-# Remplacer utilisateur et adresse par ceux du Pi :
-scp release-v0.1.0/* utilisateur@adresse-du-pi:~/
+rc-service light-dns status
+rc-service light-dns stop
+rc-service light-dns start
+rc-service light-dns restart
+light-dns --socket /run/light-dns/control.sock health
+light-dns --socket /run/light-dns/control.sock health --upstream
+light-dns --socket /run/light-dns/control.sock stats
+light-dns --socket /run/light-dns/control.sock cache clear
 ```
 
-Sur le Pi, depuis le dossier de réception :
+Éditer `/etc/light-dns/config.toml` pour choisir l’adresse LAN et les upstreams. Pour IPv6, utiliser `[adresse]:53`. Un changement d’écoute exige un redémarrage. Sinon `rc-service light-dns reload` relit explicitement le TOML ; aucun watcher n’est installé. Configurer ensuite les clients ou le DHCP manuellement et ne pas exposer le DNS à Internet.
+
+Le démon s’exécute sous `light-dns:light-dns`, jamais root. Le binaire et le service appartiennent à root, le TOML est lisible par le service et non modifiable par lui. Les données résident dans `/var/lib/light-dns/`, le cache dans `filters/` et la socket privée dans `/run/light-dns/control.sock`. OpenRC recrée ce dernier dossier au démarrage. Les messages passent par `logger` vers le journal système.
+
+Seule la capacité `CAP_NET_BIND_SERVICE` est accordée, lorsque le port configuré est inférieur au seuil privilégié du noyau. `libcap-setcap` est installé seulement si son outil est absent et nécessaire ; le système de fichiers doit accepter les capacités étendues.
+
+## Mise à jour et rollback
 
 ```sh
-sha256sum -c SHA256SUMS
-tar -xzf light-dns-v0.1.0-aarch64-unknown-linux-musl.tar.gz
-cd light-dns-v0.1.0-aarch64-unknown-linux-musl
-doas sh install.sh
+light-dns version
+light-dns update --check
+light-dns update
+light-dns update --version v0.2.0-beta.1
 ```
 
-Ne continuer que si la somme est valide. Les commandes `wget` de la section précédente fonctionnent après publication.
+Les releases publiques stables et bêta compatibles sont comparées selon SemVer, sans rétrogradation automatique. `--version` permet de choisir explicitement une version antérieure. `--check` ne demande pas root et ne modifie rien. Les limites GitHub anonymes ou une panne réseau produisent une erreur explicite.
 
-Le script exige Alpine, OpenRC et aarch64. Il installe `ca-certificates` et `libcap-setcap` via `apk`, crée le compte système `light-dns`, installe le binaire et donne uniquement la capacité `cap_net_bind_service`. Le système de fichiers du binaire doit permettre les capacités de fichiers. Aucun service n'est activé ou démarré automatiquement.
+Les téléchargements HTTPS et leurs sommes sont vérifiés avant l’arrêt. Le binaire et le service sont remplacés atomiquement, le TOML et les listes sont conservés. Le service redémarre seulement s’il fonctionnait déjà, puis la santé locale UDP/TCP est contrôlée. Une installation répétée ne réactive pas un service volontairement désactivé.
 
-## Configurer et démarrer
+En cas d’échec, l’ancienne version et l’état du service sont restaurés. Les sauvegardes et le journal restent dans `/etc/light-dns/.transaction` si le rollback échoue. Après interruption brutale, la prochaine commande de gestion mutante reprend la récupération avant toute nouvelle opération. Ne pas supprimer ces sauvegardes manuellement. Un service dont l’état OpenRC est indéterminé exige une vérification de l’administrateur.
 
-Éditer `/etc/light-dns/config.toml`. Le défaut écoute uniquement sur **127.0.0.1:53**, en UDP et TCP, avec deux upstreams et le filtrage distant par défaut. Pour desservir le LAN, choisir l'adresse LAN du Pi dans `dns.listen`, autoriser UDP/TCP dans le pare-feu local et configurer les clients ou le DHCP. Pour une écoute IPv6, utiliser la syntaxe `[adresse]:53`. Ne pas exposer le résolveur à Internet.
+`/etc/light-dns/install-state.toml` enregistre les comptes créés. Un verrou root dans `/run/light-dns-management.lock` sérialise les opérations ; son fichier reste présent pour éviter les courses entre propriétaires du verrou.
 
-Vérifier qu'aucun autre DNS, notamment AdGuard Home, n'occupe déjà le port choisi avant de démarrer. Ne pas modifier le DNS des clients avant les vérifications.
+## Désinstallation
 
 ```sh
-doas rc-update add light-dns default
-doas rc-service light-dns start
-doas light-dns --socket /run/light-dns/control.sock health
-doas light-dns --socket /run/light-dns/control.sock health --upstream
+light-dns uninstall
+light-dns uninstall --purge
 ```
 
-Le démon s'exécute sous `light-dns:light-dns`, depuis `/var/lib/light-dns`. Les listes persistent dans `/var/lib/light-dns/filters`. OpenRC recrée `/run/light-dns` avec les permissions privées requises à chaque démarrage ; la socket et son verrou ne doivent pas être supprimés pendant l'exécution. Les sorties passent par `logger` vers le journal système (habituellement `/var/log/messages` si syslog est actif).
+La première commande arrête le service, retire ses activations OpenRC, le script et le binaire ; elle garde TOML, données et compte. La purge demande de taper `PURGE` sur le terminal avant toute suppression. Elle retire les dossiers gérés et les comptes dont la création est attestée ; les comptes préexistants sont conservés. Aucun paquet partagé n’est désinstallé et aucun chemin externe mentionné dans le TOML n’est supprimé.
 
-```sh
-doas light-dns --socket /run/light-dns/control.sock stats
-doas light-dns --socket /run/light-dns/control.sock cache clear
-# Après modification du TOML, sans changement d'écoute :
-doas rc-service light-dns reload
-# Après changement de l'adresse ou du port :
-doas rc-service light-dns restart
-```
+## Validation mainteneur
 
-Le TOML n'est jamais surveillé automatiquement. OpenRC supervise le démon et limite ses relances après crash ; une configuration invalide doit être corrigée avant de le relancer.
+La CI AMD64 et l’inspection ELF statique permettent la publication publique d’une bêta, **sans revendiquer une validation Alpine AArch64 ou Raspberry Pi physique**. Sur le Pi réel, le mainteneur doit encore vérifier : OpenRC et reboot, UID non-root et port 53, UDP/TCP et IPv4/IPv6, fallback, listes HTTPS, toutes les commandes DNS, installation répétée, mise à jour et rollback, désinstallation et purge. Reporter les résultats dans `TODO.MD` seulement après ces essais.
 
-## Mise à jour et retour arrière
-
-Télécharger et vérifier la nouvelle archive avant d'arrêter le service. Conserver l'ancienne archive et sauvegarder `/etc/light-dns/config.toml`.
-
-```sh
-doas rc-service light-dns stop
-# Depuis le dossier de la nouvelle archive extraite :
-doas sh install.sh
-doas rc-service light-dns start
-doas light-dns --socket /run/light-dns/control.sock health
-```
-
-Le script refuse de remplacer un service actif, conserve la configuration existante et les listes, remplace le binaire atomiquement et réapplique sa capacité. Il ne redémarre pas le service. En cas d'échec, garder le service arrêté, corriger la cause ou réinstaller l'ancienne archive avec la même procédure. Si la configuration a été modifiée, restaurer aussi sa sauvegarde.
-
-Installation prévue sur stockage persistant. En Alpine **diskless**, rendre persistants le binaire, la configuration, le compte système, le service et son activation avec les mécanismes Alpine (`lbu`/stockage persistant) ; placer les listes sur un stockage persistant. Les capacités étendues doivent être préservées ou réappliquées après restauration. Vérifier ces points après redémarrage avant d'utiliser ce mode en production.
-
-## Validation mainteneur avant publication
-
-La compilation croisée et l'inspection ELF ne valident pas l'exécution sur Pi. Sur le Raspberry Pi 5 réel, vérifier :
-
-- démarrage, arrêt et redémarrage OpenRC, fonctionnement sans root et accès au port 53 ;
-- résolutions UDP/TCP, IPv4/IPv6, rewrites et fallback avec fixtures locales ;
-- téléchargement HTTPS des listes et conservation du cache disque ;
-- `health`, `stats`, `reload` et `cache clear`, puis une mise à jour conservant le TOML ;
-- démarrage après reboot et absence de conflit avec l'ancien serveur DNS.
-
-Reporter le résultat dans `TODO.MD` et publier le brouillon seulement après cette validation. Aucune validation matérielle n'est automatisée dans le workflow.
+Le mode diskless n’est pas couvert par cette installation autonome ; gérer explicitement la persistance Alpine avant de l’utiliser.

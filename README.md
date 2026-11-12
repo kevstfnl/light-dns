@@ -53,11 +53,45 @@ Sauvegarder ses modifications locales avant la mise à jour et résoudre tout co
 
 ## Installation native Linux
 
-### Binaire précompilé pour Alpine sur Raspberry Pi 5
+## Installation rapide — Alpine Linux / Raspberry Pi 5
 
-Une archive **Alpine aarch64 (musl statique)** est préparée par GitHub Actions pour chaque tag `vX.Y.Z`, dans une release brouillon à valider sur le Pi avant publication. Elle contient le binaire, un installateur et un service OpenRC ; aucun compilateur ni Docker n'est nécessaire sur le Pi.
+Sur **Alpine AArch64 en installation sys avec OpenRC**, depuis un shell **root** :
 
-Suivre le [guide Alpine](docs/alpine.md) pour télécharger une release publiée, vérifier SHA-256, installer et démarrer le service. L'installation conserve le TOML existant, écoute par défaut sur `127.0.0.1:53` et laisse l'activation/démarrage à l'administrateur.
+```sh
+(umask 077; f=$(mktemp) && trap 'rm -f "$f"' EXIT && wget -T 60 -qO "$f" https://github.com/kevstfnl/light-dns/releases/download/v0.2.0-beta.1/bootstrap.sh && sh "$f")
+```
+
+Cette commande exige la publication de **v0.2.0-beta.1**. Elle télécharge un binaire musl statique, vérifie SHA-256, crée le compte système `light-dns`, active OpenRC et démarre le DNS sur **127.0.0.1:53**. Aucun Rust, Cargo, Docker, Git ou GitHub CLI sur le Pi. `libcap-setcap` est installé seulement si nécessaire pour le port privilégié ; les certificats CA système sont nécessaires à HTTPS. Aucun réglage réseau ni DNS système n’est modifié.
+
+**Sécurité : le script distant s’exécute en root.** Faire confiance au dépôt GitHub et à sa chaîne de release est indispensable. SHA-256 détecte la corruption mais ne fournit pas une signature indépendante de GitHub. Pour inspecter le script et vérifier manuellement les fichiers avant exécution, suivre la [méthode manuelle](docs/alpine.md#installation-manuelle-avec-vérification). Ne jamais désactiver la vérification TLS.
+
+```sh
+rc-service light-dns status
+rc-service light-dns stop
+rc-service light-dns start
+rc-service light-dns restart
+rc-service light-dns reload
+rc-update add light-dns default
+light-dns --socket /run/light-dns/control.sock health
+light-dns version
+light-dns update --check
+light-dns update
+light-dns update --version v0.2.0-beta.1
+light-dns uninstall
+light-dns uninstall --purge
+```
+
+`update` inclut les bêtas, conserve le TOML et les données et restaure l’ancienne installation si le redémarrage ou la santé locale échoue. Un service déjà arrêté reste arrêté. Seul `--version` permet une rétrogradation explicite. `uninstall` conserve configuration, données et compte ; `--purge` exige de taper `PURGE` sur un terminal et ne supprime que les comptes créés par cet installateur. Aucun paquet partagé n’est désinstallé.
+
+| Usage | Emplacement |
+| --- | --- |
+| Binaire | `/usr/local/bin/light-dns` |
+| Configuration | `/etc/light-dns/config.toml` |
+| Données | `/var/lib/light-dns/` |
+| Service OpenRC | `/etc/init.d/light-dns` |
+| Socket et fichiers temporaires du service | `/run/light-dns/` |
+
+La bêta peut être publiée après CI ; **l’exécution sur Raspberry Pi physique reste à valider par le mainteneur**. Le [guide Alpine](docs/alpine.md) détaille les permissions, les erreurs et la validation matérielle.
 
 ### Compilation depuis les sources
 

@@ -1,6 +1,8 @@
 mod cli;
 #[cfg(unix)]
 mod control;
+#[cfg(unix)]
+mod management;
 mod shutdown;
 
 use crate::{config::Config, dns::server};
@@ -14,6 +16,17 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     if matches!(args.command, Command::Help) {
         print!("{}", cli::HELP);
         return Ok(());
+    }
+    if matches!(args.command, Command::Version) {
+        println!("light-dns {}", env!("CARGO_PKG_VERSION"));
+        return Ok(());
+    }
+    #[cfg(unix)]
+    if matches!(
+        args.command,
+        Command::Install | Command::Update { .. } | Command::Uninstall(_)
+    ) {
+        return management::run(args.command).await;
     }
     if !matches!(args.command, Command::Serve) {
         #[cfg(unix)]

@@ -39,3 +39,32 @@ fn help_usage_errors_and_unavailable_daemon_are_reported_without_config() -> Tes
     }
     Ok(())
 }
+
+#[test]
+fn version_and_lifecycle_usage_do_not_require_a_daemon() -> TestResult {
+    let directory = TestDirectory::new()?;
+    let binary = env!("CARGO_BIN_EXE_light-dns");
+    let version = Command::new(binary)
+        .current_dir(&directory.0)
+        .arg("version")
+        .output()?;
+    assert!(version.status.success());
+    assert_eq!(
+        String::from_utf8(version.stdout)?,
+        format!("light-dns {}\n", env!("CARGO_PKG_VERSION"))
+    );
+    for args in [
+        vec!["update", "--version"],
+        vec!["update", "--check", "--version", "1.0.0"],
+        vec!["uninstall", "--yes"],
+        vec!["install", "extra"],
+    ] {
+        let output = Command::new(binary)
+            .current_dir(&directory.0)
+            .args(args)
+            .output()?;
+        assert!(!output.status.success());
+        assert!(String::from_utf8(output.stderr)?.contains("commande inconnue"));
+    }
+    Ok(())
+}

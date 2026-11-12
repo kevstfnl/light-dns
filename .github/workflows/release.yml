@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Tag existant (vX.Y.Z) à reconstruire en brouillon'
+        description: 'Tag existant (vX.Y.Z ou préversion) à construire et publier'
         required: true
         type: string
 
@@ -43,7 +43,7 @@ jobs:
       - run: cargo clippy --locked --all-targets -- -D warnings
       - run: cargo test --locked
       - run: cargo check --locked
-      - run: shellcheck packaging/alpine/install.sh scripts/setup-release-tools.sh scripts/package-release.sh
+      - run: shellcheck packaging/alpine/bootstrap.sh packaging/alpine/install.sh scripts/setup-release-tools.sh scripts/package-release.sh
       - run: sh -n packaging/alpine/light-dns.initd
 
   build:
@@ -55,7 +55,7 @@ jobs:
         with:
           ref: ${{ inputs.tag && format('refs/tags/{0}', inputs.tag) || github.ref }}
           persist-credentials: false
-      - run: rustup toolchain install 1.99.1 --profile minimal --target aarch64-unknown-linux-musl
+      - run: rustup toolchain install 1.99.1 --profile minimal --target aarch64-unknown-linux-musl,x86_64-unknown-linux-musl
       - run: sudo apt-get update && sudo apt-get install -y build-essential binutils jq
       - name: Validate version
         env:
@@ -64,7 +64,7 @@ jobs:
           metadata=$(cargo metadata --locked --no-deps --format-version 1)
           version=$(jq -er '.packages[] | select(.name == "light-dns") | .version' <<< "$metadata")
           tag="${REQUESTED_TAG:-v$version}"
-          if [[ ! "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || [[ "$tag" != "v$version" ]]; then
+          if [[ ! "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z]+([.-][0-9A-Za-z]+)*)?$ ]] || [[ "$tag" != "v$version" ]]; then
             echo 'Tag invalide ou différent de la version Cargo' >&2
             exit 1
           fi
@@ -73,20 +73,21 @@ jobs:
         run: |
           sh scripts/setup-release-tools.sh "$RUNNER_TEMP/release-tools"
           printf '%s\n' "$RUNNER_TEMP/release-tools/cargo-zigbuild" "$RUNNER_TEMP/release-tools/zig" "$RUNNER_TEMP/release-tools/cmake/bin" >> "$GITHUB_PATH"
-      - run: cargo zigbuild --release --locked --target aarch64-unknown-linux-musl
+      - run: cargo zigbuild --release --locked --target aarch64-unknown-linux-musl --target x86_64-unknown-linux-musl
         env:
           RUSTFLAGS: -Dwarnings
+      - name: Validate OpenRC on Alpine AMD64 (no ARM execution)
+        run: cargo test --locked --test integration alpine_openrc -- --ignored
       - run: sh scripts/package-release.sh "$RELEASE_TAG"
       - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: alpine-arm64
           path: |
-            target/release-assets/*.tar.gz
-            target/release-assets/SHA256SUMS
+            target/release-assets/*
           if-no-files-found: error
           retention-days: 14
 
-  draft:
+  publish:
     if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
     needs: build
     runs-on: ubuntu-24.04
@@ -102,21 +103,34 @@ jobs:
         with:
           name: alpine-arm64
           path: target/release-assets
-      - name: Create or update draft only
+      - name: Upload verified assets and publish prerelease
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           TAG: ${{ inputs.tag || github.ref_name }}
         run: |
           set -euo pipefail
-          [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z]+([.-][0-9A-Za-z]+)*)?$ ]]
           (cd target/release-assets && sha256sum -c SHA256SUMS)
-          cat docs/release-notes.md > "$RUNNER_TEMP/release-notes.md"
-          printf '\nCommit : %s\n' "$(git rev-parse HEAD)" >> "$RUNNER_TEMP/release-notes.md"
-          if gh release view "$TAG" --json isDraft --jq '.isDraft' > "$RUNNER_TEMP/is-draft"; then
-            [[ "$(cat "$RUNNER_TEMP/is-draft")" == true ]] || { echo 'Refus de modifier une release publiée' >&2; exit 1; }
-            gh release edit "$TAG" --notes-file "$RUNNER_TEMP/release-notes.md"
+          api="https://api.github.com/repos/$GH_REPO/releases"
+          auth="Authorization: Bearer $GH_TOKEN"
+          status=$(curl --proto '=https' --tlsv1.2 -sS -o "$RUNNER_TEMP/release.json" -w '%{http_code}' -H "$auth" "$api/tags/$TAG")
+          if [ "$status" = 200 ]; then
+            jq -e '.draft == true' "$RUNNER_TEMP/release.json" >/dev/null || { echo 'Refus de modifier une release publiée' >&2; exit 1; }
+          elif [ "$status" = 404 ]; then
+            jq -n --arg tag "$TAG" --rawfile notes docs/release-notes.md '{tag_name:$tag,name:$tag,body:$notes,draft:true,prerelease:($tag|contains("-")),make_latest:"false"}' > "$RUNNER_TEMP/payload.json"
+            curl --proto '=https' --tlsv1.2 -fsS -H "$auth" -H 'Content-Type: application/json' --data-binary "@$RUNNER_TEMP/payload.json" "$api" > "$RUNNER_TEMP/release.json"
           else
-            gh release create "$TAG" --verify-tag --draft --title "$TAG" --notes-file "$RUNNER_TEMP/release-notes.md"
+            echo "Lecture de la release impossible : HTTP $status" >&2; exit 1
           fi
-          gh release upload "$TAG" target/release-assets/*.tar.gz target/release-assets/SHA256SUMS --clobber
+          id=$(jq -er '.id' "$RUNNER_TEMP/release.json")
+          for file in target/release-assets/*; do
+            name=${file##*/}
+            existing=$(jq -r --arg name "$name" '.assets[] | select(.name == $name) | .id' "$RUNNER_TEMP/release.json")
+            if [ -n "$existing" ]; then
+              curl --proto '=https' --tlsv1.2 -fsS -X DELETE -H "$auth" "$api/assets/$existing"
+            fi
+            curl --proto '=https' --tlsv1.2 -fsS -H "$auth" -H 'Content-Type: application/octet-stream' --data-binary "@$file" "https://uploads.github.com/repos/$GH_REPO/releases/$id/assets?name=$name" > /dev/null
+          done
+          jq -n --arg tag "$TAG" --rawfile notes docs/release-notes.md '{draft:false,prerelease:($tag|contains("-")),make_latest:"false",body:$notes}' > "$RUNNER_TEMP/publish.json"
+          curl --proto '=https' --tlsv1.2 -fsS -X PATCH -H "$auth" -H 'Content-Type: application/json' --data-binary "@$RUNNER_TEMP/publish.json" "$api/$id" > /dev/null

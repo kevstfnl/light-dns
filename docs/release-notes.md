@@ -1,12 +1,13 @@
-# light-dns v0.1.0
+# light-dns v0.2.0-beta.1
 
-Première distribution native pour Alpine Linux aarch64 sur Raspberry Pi 5 avec stockage persistant.
+Bêta publique pour Alpine Linux AArch64 en installation sys avec OpenRC.
 
-- Serveur DNS UDP/TCP, IPv4/IPv6, forwarding avec fallback, cache TTL, rewrites locaux et filtrage de domaines.
-- Administration locale : `health`, `stats`, `reload` et `cache clear`. Rechargement du TOML uniquement sur commande.
-- Binaire musl statique ; aucun compilateur, Docker ou Python nécessaire sur le Pi.
-- Installateur avec compte dédié, capacité limitée à l'écoute sur le port 53 et service OpenRC. Configuration existante conservée lors d'une réinstallation.
+- CLI autonome : installation, mise à jour avec vérification SHA-256 et rollback, désinstallation et purge confirmée.
+- Bootstrap POSIX BusyBox et installation manuelle vérifiée ; aucun compilateur, Git, GitHub CLI ou Docker sur le Pi.
+- Service non-root, capacité réseau conditionnelle, configuration et données conservées.
+- Releases stables et bêta reconnues ; sélection explicite et vérification sans mutation.
+- Fonctions DNS et configuration TOML existantes conservées.
 
-Télécharger l'archive `light-dns-v0.1.0-aarch64-unknown-linux-musl.tar.gz` et `SHA256SUMS`, vérifier la somme puis suivre `INSTALL.md` dans l'archive. Le service écoute initialement sur `127.0.0.1:53` ; l'activation OpenRC et la configuration LAN sont explicites.
+Assets : binaire musl statique AArch64, archive manuelle, bootstrap, service OpenRC et `SHA256SUMS`. Consulter le README et le guide Alpine avant installation.
 
-**Brouillon : validation matérielle par le mainteneur requise avant publication.** La compilation croisée et les contrôles ELF ne valident pas l'exécution sur Alpine ou Raspberry Pi. Vérifier OpenRC, UDP/TCP, IPv4/IPv6, fallback, listes HTTPS, administration, réinstallation et reboot avant de basculer les clients DNS. Les mesures de performance et de mémoire restantes sont suivies dans `TODO.MD` ; aucun gain mesuré sur le Pi n'est revendiqué.
+**Raspberry Pi physique et exécution Alpine AArch64 non validés.** La compilation croisée et la CI AMD64 ne remplacent pas les essais matériels du mainteneur. Ne pas basculer les clients DNS avant ses propres vérifications. Les validations restantes figurent dans `TODO.MD`.

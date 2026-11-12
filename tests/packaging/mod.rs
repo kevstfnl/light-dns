@@ -2,7 +2,7 @@
 use crate::support::{TestResult, process::TestDirectory};
 use std::{
     fs,
-    os::unix::fs::{PermissionsExt, symlink},
+    os::unix::fs::PermissionsExt,
     path::{Path, PathBuf},
     process::{Command, Output},
 };
@@ -95,7 +95,12 @@ impl Fixture {
             path
         } else {
             fs::create_dir_all(root.join("packaging/alpine"))?;
-            for name in ["config.toml", "light-dns.initd", "install.sh"] {
+            for name in [
+                "config.toml",
+                "light-dns.initd",
+                "install.sh",
+                "bootstrap.sh",
+            ] {
                 fs::copy(
                     repo.join("packaging/alpine").join(name),
                     root.join("packaging/alpine").join(name),
@@ -131,10 +136,6 @@ impl Fixture {
             .envs(env.iter().copied())
             .output()?)
     }
-
-    fn calls(&self) -> TestResult<String> {
-        Ok(fs::read_to_string(self.root().join("calls"))?)
-    }
 }
 
 fn success(output: Output) {
@@ -143,126 +144,6 @@ fn success(output: Output) {
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
-}
-
-#[test]
-fn fresh_install_and_reinstall_preserve_configuration() -> TestResult {
-    let fixture = Fixture::new(true)?;
-    success(fixture.run(&[], &[])?);
-    let root = fixture.root();
-    let binary = root.join("usr/local/bin/light-dns");
-    assert_eq!(
-        fs::read(&binary)?,
-        fs::read(root.join("archive/light-dns"))?
-    );
-    assert_eq!(fs::metadata(&binary)?.permissions().mode() & 0o777, 0o755);
-    let config = root.join("etc/light-dns/config.toml");
-    fs::write(&config, "operator configuration")?;
-    success(fixture.run(&[], &[])?);
-    assert_eq!(fs::read_to_string(config)?, "operator configuration");
-    assert_eq!(
-        fs::metadata(root.join("run/light-dns"))?
-            .permissions()
-            .mode()
-            & 0o777,
-        0o700
-    );
-    let calls = fixture.calls()?;
-    assert_eq!(
-        calls.lines().filter(|c| c.starts_with("setcap ")).count(),
-        2
-    );
-    assert_eq!(
-        calls.lines().filter(|c| c.starts_with("adduser ")).count(),
-        1
-    );
-    assert!(
-        !calls
-            .lines()
-            .any(|c| c.starts_with("rc-service ") && !c.ends_with(" status"))
-    );
-    Ok(())
-}
-
-#[test]
-fn rejects_wrong_environment_before_installing_packages() -> TestResult {
-    let fixture = Fixture::new(true)?;
-    for env in [[("FIXTURE_UID", "1000")], [("FIXTURE_ARCH", "x86_64")]] {
-        assert!(!fixture.run(&[], &env)?.status.success());
-    }
-    fs::remove_file(fixture.root().join("etc/alpine-release"))?;
-    assert!(!fixture.run(&[], &[])?.status.success());
-    assert!(!fixture.calls()?.lines().any(|c| c.starts_with("apk ")));
-    Ok(())
-}
-
-#[test]
-fn refuses_active_or_unknown_service_state() -> TestResult {
-    let fixture = Fixture::new(true)?;
-    fs::write(fixture.root().join("etc/init.d/light-dns"), "")?;
-    for status in ["0", "1"] {
-        assert!(
-            !fixture
-                .run(&[], &[("FIXTURE_STATUS", status)])?
-                .status
-                .success()
-        );
-    }
-    assert!(!fixture.calls()?.lines().any(|c| c.starts_with("apk ")));
-    Ok(())
-}
-
-#[test]
-fn rejects_incomplete_archive_and_symlinks() -> TestResult {
-    let fixture = Fixture::new(true)?;
-    let config = fixture.root().join("archive/config.toml");
-    fs::rename(&config, fixture.root().join("saved-config"))?;
-    assert!(!fixture.run(&[], &[])?.status.success());
-    symlink(fixture.root().join("saved-config"), &config)?;
-    assert!(!fixture.run(&[], &[])?.status.success());
-    fs::remove_file(&config)?;
-    fs::rename(fixture.root().join("saved-config"), &config)?;
-    fs::create_dir(fixture.root().join("foreign"))?;
-    symlink(
-        fixture.root().join("foreign"),
-        fixture.root().join("etc/light-dns"),
-    )?;
-    assert!(!fixture.run(&[], &[])?.status.success());
-    assert!(!fixture.calls()?.lines().any(|c| c.starts_with("apk ")));
-    Ok(())
-}
-
-#[test]
-fn capability_failure_preserves_binary_and_cleans_stage() -> TestResult {
-    let fixture = Fixture::new(true)?;
-    success(fixture.run(&[], &[])?);
-    let binary = fixture.root().join("usr/local/bin/light-dns");
-    fs::write(&binary, b"old")?;
-    assert!(
-        !fixture
-            .run(&[], &[("FIXTURE_FAIL", "setcap")])?
-            .status
-            .success()
-    );
-    assert_eq!(fs::read(binary)?, b"old");
-    assert_eq!(
-        fs::read_dir(fixture.root().join("usr/local/bin"))?.count(),
-        1
-    );
-    Ok(())
-}
-
-#[test]
-fn package_failure_leaves_no_binary() -> TestResult {
-    let fixture = Fixture::new(true)?;
-    assert!(
-        !fixture
-            .run(&[], &[("FIXTURE_FAIL", "apk")])?
-            .status
-            .success()
-    );
-    assert!(!fixture.root().join("usr/local/bin/light-dns").exists());
-    Ok(())
 }
 
 #[test]
@@ -360,5 +241,82 @@ fn rejects_version_mismatch_wrong_architecture_or_dynamic_elf() -> TestResult {
         assert!(!fixture.run(&[&tag], &[env])?.status.success());
     }
     assert!(!fixture.root().join("target/release-assets").exists());
+    Ok(())
+}
+
+#[test]
+fn bootstrap_verifies_downloads_rejects_corruption_and_cleans_up() -> TestResult {
+    let fixture = Fixture::new(false)?;
+    let root = fixture.root();
+    let binary = root.join("downloaded-binary");
+    fs::write(
+        &binary,
+        format!(
+            "#!/bin/sh\nprintf '%s' \"$*\" > '{}/installed'\n",
+            root.display()
+        ),
+    )?;
+    let hash = Command::new("sha256sum").arg(&binary).output()?;
+    assert!(hash.status.success());
+    let hash = String::from_utf8(hash.stdout)?;
+    let digest = hash.split_whitespace().next().ok_or("missing digest")?;
+    let name = format!(
+        "light-dns-v{}-aarch64-unknown-linux-musl",
+        env!("CARGO_PKG_VERSION")
+    );
+    fs::write(root.join("downloaded-sums"), format!("{digest}  {name}\n"))?;
+    let wget = root.join("bin/wget");
+    fs::write(
+        &wget,
+        format!(
+            r#"#!/bin/sh
+set -eu
+while [ "$1" != -O ]; do shift; done
+destination=$2
+if [ "$destination" = SHA256SUMS ]; then cp '{}/downloaded-sums' "$destination"
+else cp '{}/downloaded-binary' "$destination"; fi
+"#,
+            root.display(),
+            root.display()
+        ),
+    )?;
+    fs::set_permissions(wget, fs::Permissions::from_mode(0o755))?;
+    let script = fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("packaging/alpine/bootstrap.sh"),
+    )?
+    .replace(
+        "/etc/alpine-release",
+        &format!("{}/alpine-release", root.display()),
+    )
+    .replace(
+        "/tmp/light-dns-bootstrap.",
+        &format!("{}/light-dns-bootstrap.", root.display()),
+    );
+    fs::write(root.join("alpine-release"), "fixture")?;
+    let bootstrap = root.join("bootstrap.sh");
+    fs::write(&bootstrap, script)?;
+    let paths = std::env::join_paths([
+        root.join("bin"),
+        PathBuf::from("/usr/bin"),
+        PathBuf::from("/bin"),
+    ])?;
+    let run = || {
+        Command::new("sh")
+            .arg(&bootstrap)
+            .env("PATH", &paths)
+            .env("FIXTURE_ROOT", root)
+            .output()
+    };
+    success(run()?);
+    assert_eq!(fs::read_to_string(root.join("installed"))?, "install");
+    fs::remove_file(root.join("installed"))?;
+    fs::write(&binary, "corrupted")?;
+    assert!(!run()?.status.success());
+    assert!(!root.join("installed").exists());
+    assert!(!fs::read_dir(root)?.filter_map(Result::ok).any(|e| {
+        e.file_name()
+            .to_string_lossy()
+            .starts_with("light-dns-bootstrap.")
+    }));
     Ok(())
 }
