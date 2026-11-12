@@ -21,3 +21,5 @@ Procédures : [maintenance](docs/maintenance.md), [installation et validation Al
 - [x] CI distante et téléchargements publics de v0.2.0-beta.1 validés ; la vérification manuelle a révélé une collision entre le binaire brut et le dossier extrait. Procédure corrigée dans v0.2.0-beta.2 avec un dossier d’extraction séparé.
 - [x] CI complète de v0.2.0-beta.2 réussie (run 43278685338), prerelease publique publiée. Les cinq assets ont été téléchargés anonymement dans une Alpine AMD64 fraîche sans ajout de paquet ; sommes SHA-256, extraction manuelle et correspondance des fichiers vérifiées. `update --check` reconnaît la bêta 2. Aucun binaire ARM exécuté.
 - [ ] Validation physique par le mainteneur : installation sys Alpine AArch64, reboot, mise à jour/rollback et purge interactive sur Raspberry Pi 5. Aucun essai ARM64 effectué.
+
+- [x] Simplifier le README (160 → 49 lignes) et déplacer les détails Docker, développement et utilisation dans `docs/` ; exemple TOML toujours testé, liens locaux vérifiés, fmt/Clippy/check validés et 149 tests réussis (10 ignorés) le 2026-11-12.

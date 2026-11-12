@@ -12,7 +12,7 @@ cargo check --locked
 cargo build --release --locked
 ```
 
-Les tests de configuration valident les TOML natif, Docker et Alpine, ainsi que le petit exemple du README. Les tests réseau exigent des sockets UDP/TCP loopback, IPv6 et Unix autorisées. `EPERM` est un échec d’environnement, pas une validation ; ne pas l’ignorer ni contourner les restrictions.
+Les tests de configuration valident les TOML natif, Docker et Alpine, ainsi que l’exemple du [guide de configuration](utilisation.md). Les tests réseau exigent des sockets UDP/TCP loopback, IPv6 et Unix autorisées. `EPERM` est un échec d’environnement, pas une validation ; ne pas l’ignorer ni contourner les restrictions.
 
 Test explicite du conteneur, sur Linux AMD64 uniquement :
 

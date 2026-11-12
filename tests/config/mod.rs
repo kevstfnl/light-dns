@@ -101,11 +101,11 @@ fn rejects_invalid_toml_schema_and_duplicate_keys() {
 }
 
 #[test]
-fn readme_configuration_is_valid() -> Result<(), ConfigError> {
-    let readme = include_str!("../../README.md");
-    let example = readme
+fn documented_configuration_is_valid() -> Result<(), ConfigError> {
+    let documentation = include_str!("../../docs/utilisation.md");
+    let example = documentation
         .split_once("```toml\n")
-        .expect("README TOML example")
+        .expect("documented TOML example")
         .1
         .split_once("```")
         .expect("closed TOML example")
