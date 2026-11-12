@@ -58,10 +58,10 @@ Sauvegarder ses modifications locales avant la mise à jour et résoudre tout co
 Sur **Alpine AArch64 en installation sys avec OpenRC**, depuis un shell **root** :
 
 ```sh
-(umask 077; f=$(mktemp) && trap 'rm -f "$f"' EXIT && wget -T 60 -qO "$f" https://github.com/kevstfnl/light-dns/releases/download/v0.2.0-beta.1/bootstrap.sh && sh "$f")
+(umask 077; f=$(mktemp) && trap 'rm -f "$f"' EXIT && wget -T 60 -qO "$f" https://github.com/kevstfnl/light-dns/releases/download/v0.2.0-beta.2/bootstrap.sh && sh "$f")
 ```
 
-Cette commande exige la publication de **v0.2.0-beta.1**. Elle télécharge un binaire musl statique, vérifie SHA-256, crée le compte système `light-dns`, active OpenRC et démarre le DNS sur **127.0.0.1:53**. Aucun Rust, Cargo, Docker, Git ou GitHub CLI sur le Pi. `libcap-setcap` est installé seulement si nécessaire pour le port privilégié ; les certificats CA système sont nécessaires à HTTPS. Aucun réglage réseau ni DNS système n’est modifié.
+Cette commande exige la publication de **v0.2.0-beta.2**. Elle télécharge un binaire musl statique, vérifie SHA-256, crée le compte système `light-dns`, active OpenRC et démarre le DNS sur **127.0.0.1:53**. Aucun Rust, Cargo, Docker, Git ou GitHub CLI sur le Pi. `libcap-setcap` est installé seulement si nécessaire pour le port privilégié ; les certificats CA système sont nécessaires à HTTPS. Aucun réglage réseau ni DNS système n’est modifié.
 
 **Sécurité : le script distant s’exécute en root.** Faire confiance au dépôt GitHub et à sa chaîne de release est indispensable. SHA-256 détecte la corruption mais ne fournit pas une signature indépendante de GitHub. Pour inspecter le script et vérifier manuellement les fichiers avant exécution, suivre la [méthode manuelle](docs/alpine.md#installation-manuelle-avec-vérification). Ne jamais désactiver la vérification TLS.
 
@@ -76,7 +76,7 @@ light-dns --socket /run/light-dns/control.sock health
 light-dns version
 light-dns update --check
 light-dns update
-light-dns update --version v0.2.0-beta.1
+light-dns update --version v0.2.0-beta.2
 light-dns uninstall
 light-dns uninstall --purge
 ```

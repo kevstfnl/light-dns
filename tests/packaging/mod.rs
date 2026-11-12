@@ -160,8 +160,11 @@ fn archive_content_metadata_permissions_and_checksum() -> TestResult {
     );
     let name = format!("light-dns-{tag}-aarch64-unknown-linux-musl");
     let archive = assets.join(format!("{name}.tar.gz"));
-    let extracted = fixture.root().join("extracted");
+    // Reproduce the manual guide: all downloaded assets coexist in the same directory.
+    // The raw binary has the same basename as the archive directory, so extraction needs a subdirectory.
+    let extracted = assets.join("extracted");
     fs::create_dir(&extracted)?;
+    assert!(assets.join(&name).is_file());
     success(
         Command::new("tar")
             .arg("-xzf")

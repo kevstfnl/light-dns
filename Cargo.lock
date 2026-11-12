@@ -844,7 +844,7 @@ checksum = "65cd87c9a6d60536580b316ad985726104730a5151c99845f2490428ef91240a"
 
 [[package]]
 name = "light-dns"
-version = "0.2.0-beta.1"
+version = "0.2.0-beta.2"
 dependencies = [
  "arc-swap",
  "async-trait",

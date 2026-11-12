@@ -1,6 +1,8 @@
-# light-dns v0.2.0-beta.1
+# light-dns v0.2.0-beta.2
 
 Bêta publique pour Alpine Linux AArch64 en installation sys avec OpenRC.
+
+Cette bêta remplace v0.2.0-beta.1 : la méthode manuelle extrait désormais l’archive dans un sous-dossier pour éviter la collision avec le nom du binaire brut téléchargé. Le mécanisme de mise à jour reste compatible.
 
 - CLI autonome : installation, mise à jour avec vérification SHA-256 et rollback, désinstallation et purge confirmée.
 - Bootstrap POSIX BusyBox et installation manuelle vérifiée ; aucun compilateur, Git, GitHub CLI ou Docker sur le Pi.
