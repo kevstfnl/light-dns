@@ -19,7 +19,27 @@ doas sh install.sh
 
 Utiliser `sudo` ou un shell root si `doas` n'est pas configuré. Ne continuer que si la vérification SHA-256 réussit ; elle détecte une archive corrompue, sans constituer une signature indépendante de GitHub.
 
-Un brouillon n'est accessible qu'aux comptes autorisés : le mainteneur peut utiliser `gh release download v0.1.0 --repo kevstfnl/light-dns --dir release-v0.1.0`, puis transférer les deux fichiers sur le Pi. Les commandes `wget` ci-dessus fonctionnent après publication.
+### Première installation depuis le brouillon
+
+Un brouillon n'est accessible qu'aux comptes autorisés. Depuis le poste du mainteneur avec GitHub CLI authentifié et SSH vers le Pi :
+
+```sh
+gh release download v0.1.0 --repo kevstfnl/light-dns --dir release-v0.1.0 \
+  --pattern '*.tar.gz' --pattern SHA256SUMS
+# Remplacer utilisateur et adresse par ceux du Pi :
+scp release-v0.1.0/* utilisateur@adresse-du-pi:~/
+```
+
+Sur le Pi, depuis le dossier de réception :
+
+```sh
+sha256sum -c SHA256SUMS
+tar -xzf light-dns-v0.1.0-aarch64-unknown-linux-musl.tar.gz
+cd light-dns-v0.1.0-aarch64-unknown-linux-musl
+doas sh install.sh
+```
+
+Ne continuer que si la somme est valide. Les commandes `wget` de la section précédente fonctionnent après publication.
 
 Le script exige Alpine, OpenRC et aarch64. Il installe `ca-certificates` et `libcap-setcap` via `apk`, crée le compte système `light-dns`, installe le binaire et donne uniquement la capacité `cap_net_bind_service`. Le système de fichiers du binaire doit permettre les capacités de fichiers. Aucun service n'est activé ou démarré automatiquement.
 

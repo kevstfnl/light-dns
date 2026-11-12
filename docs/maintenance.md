@@ -26,17 +26,19 @@ Ce test crée ses propres ressources temporaires. Ne pas le lancer contre des re
 
 ## Mesures reproductibles
 
-Linux avec `/proc`, `getconf` et Python 3 pour l’orchestration ; aucune bibliothèque Python supplémentaire. Construire les binaires avant de mesurer, sans build ni campagne concurrente. Les résultats restent sous `target/benchmarks/` : copier ce dossier avant un `cargo clean` pour les archiver.
+Linux avec `/proc` et `getconf`. Construire les binaires avant de mesurer, sans build ni campagne concurrente. Les résultats restent sous `target/benchmarks/` : copier ce dossier avant un `cargo clean` pour les archiver.
 
 ```bash
-# Candidats exclusivement compilés dans les tests : cinq A/B alternés.
-python3 scripts/benchmark-offline.py --suite response --suite filtering --suite rewrites
-python3 scripts/benchmark-offline.py --suite cache --output target/benchmarks/cache-paired
-# RSS : cinq paires alternées, chaque variante dans un processus distinct.
-python3 scripts/benchmark-offline.py --cache-process-pairs 5 --output target/benchmarks/cache-process-pairs
+cargo build --release --locked
+cargo test --release --locked --lib --no-run
+# Microbenchmarks Rust ignorés par défaut ; candidats uniquement dans les tests.
+LIGHT_DNS_OFFLINE_DIR="$PWD/target/benchmarks/offline" cargo test --release --locked --lib offline:: -- --ignored --nocapture --test-threads=1
+# Exemple : mesurer chaque variante cache dans un processus distinct.
+LIGHT_DNS_OFFLINE_DIR="$PWD/target/benchmarks/cache-current" LIGHT_DNS_CACHE_VARIANT=current cargo test --release --locked --lib dns::cache::offline::cache_storage -- --ignored --nocapture --test-threads=1
+LIGHT_DNS_OFFLINE_DIR="$PWD/target/benchmarks/cache-parsed" LIGHT_DNS_CACHE_VARIANT=parsed cargo test --release --locked --lib dns::cache::offline::cache_storage -- --ignored --nocapture --test-threads=1
 ```
 
-Le manifeste JSON identifie sources, lockfile, binaire, outils et limites ; les CSV bruts et agrégés restent exploitables. Ces expériences ne modifient pas le serveur. La borne EDNS ne couvre que A/AAAA/CNAME/SOA et garde la pré-sérialisation pour tout autre cas. Le cache pré-parsé conserve un message immuable, le clone au hit et vieillit les TTL ; son poids expérimental ne sait estimer que les fixtures A/SOA.
+Ces commandes produisent les CSV des harnais Rust ; elles ne remplacent pas l'ancienne orchestration Python : aucun manifeste, agrégat ni alternance de processus n'est généré automatiquement. Pour une campagne A/B, archiver le commit, l'état Git, le lockfile, les empreintes des sources/binaires et les versions des outils ; lancer cinq paires dans des dossiers distincts en alternant leur ordre. Ces expériences ne modifient pas le serveur. La borne EDNS ne couvre que A/AAAA/CNAME/SOA et garde la pré-sérialisation pour tout autre cas. Le cache pré-parsé conserve un message immuable, le clone au hit et vieillit les TTL ; son poids expérimental ne sait estimer que les fixtures A/SOA.
 
 Les microbenchmarks incluent le coût du chronomètre et du harnais : p50/p95/p99 portent sur les 1000 dernières opérations, CPU et débit sur toutes les opérations pendant au moins 250 ms. Une opération cache concurrente est un lot de 32 ou 256 lectures, y compris les tâches Tokio, pas une latence DNS individuelle. Le CSV indique le nombre d’opérations ; multiplier par la taille du lot pour compter les lectures. Les expériences de conversion ASCII, de scratch `PatternSet` et de filtrage des identifiants en place isolent ces seuls coûts, pas un changement complet du moteur. Aucun compteur d’allocations n’est fourni.
 
@@ -76,7 +78,7 @@ Conserver une optimisation seulement si le gain dépasse la dispersion des réf�
 
 ## Forgejo
 
-`.forgejo/workflows/ci.yml` conserve la CI et la publication Docker Forgejo. Le runner `FORGEJO_CI_RUNNER` (défaut `ubuntu-latest`) doit être Linux AMD64 avec Git, Bash, Node.js 24, rustup, compilateur C, make, CMake et CA ; le label ne provisionne pas cet environnement. Activer le service de cache du runner si utilisé.
+`.forgejo/workflows/ci.yml` conserve la CI et la publication Docker Forgejo. Le runner `FORGEJO_CI_RUNNER` (défaut `ubuntu-latest`) doit être Linux AMD64 avec Git, Bash, Node.js 24, rustup, compilateur C, make, CMake, jq, tar, sha256sum, GNU install et CA ; le label ne provisionne pas cet environnement. Activer le service de cache du runner si utilisé.
 
 La publication reste manuelle, sur une révision de confiance, avec `image_tag`. Le runner `FORGEJO_DOCKER_RUNNER` (défaut `docker-amd64`) exige Docker Linux AMD64 ; utiliser un moteur dédié. Configurer `FORGEJO_REGISTRY_USER` et le secret `FORGEJO_REGISTRY_TOKEN` limité à l’écriture des packages. Les PR n’ont pas besoin de ces secrets ni du moteur Docker.
 
@@ -88,7 +90,9 @@ L’image publiée est `<hôte-forgejo>/<propriétaire>/<dépôt>:<image_tag>` e
 
 Les actions sont figées par SHA. Les outils de compilation sont Rust 1.99.1, cargo-zigbuild 0.23.4, Zig 0.15.2 et CMake 4.4.5 ; les archives des trois derniers sont vérifiées par SHA-256. ShellCheck 0.11.0 est également figé et vérifié par SHA-256, afin d'utiliser la même version en local et en CI. Le jeton GitHub intégré suffit : seul le job de brouillon a `contents: write`.
 
-Reproduction depuis Linux AMD64 avec rustup, Python 3.11+, Git, curl, tar, xz, binutils et les outils C/make :
+Les huit tests de packaging sont intégrés à `cargo test --locked` sur Linux. Ils simulent les commandes système dans des dossiers temporaires, sans compte, paquet ni service réel. Ils nécessitent `sh`, `jq`, `tar`, `sha256sum` et GNU `install` sur l'hôte de test AMD64.
+
+Reproduction depuis Linux AMD64 avec rustup, Git, jq, curl, tar, xz, binutils et les outils C/make :
 
 ```sh
 rustup toolchain install 1.99.1 --profile minimal --target aarch64-unknown-linux-musl
@@ -96,13 +100,15 @@ sh scripts/setup-release-tools.sh "$PWD/target/release-tools"
 export PATH="$PWD/target/release-tools/cargo-zigbuild:$PWD/target/release-tools/zig:$PWD/target/release-tools/cmake/bin:$PATH"
 RUSTUP_TOOLCHAIN=1.99.1 RUSTFLAGS=-Dwarnings cargo zigbuild --release --locked --target aarch64-unknown-linux-musl
 sh scripts/package-release.sh v0.1.0
-python3 -m unittest discover -s tests/packaging -v
+cargo test --locked --test integration packaging::
 shellcheck packaging/alpine/install.sh scripts/setup-release-tools.sh scripts/package-release.sh
 sh -n packaging/alpine/light-dns.initd
 actionlint .github/workflows/release.yml
 ```
 
-Mettre à jour la version Cargo et le lockfile ensemble avant un nouveau tag. Committer les fichiers validés avant l'empaquetage : `REVISION` identifie le commit HEAD. L'archive et `SHA256SUMS` sont produits dans `target/release-assets/`. Pour publier la première version, pousser le commit validé puis le tag `v0.1.0`, examiner le workflow et télécharger le brouillon avec `gh release download` (voir [installation et validation sur Pi](alpine.md)). Publier manuellement seulement après validation matérielle ; cette étape ne doit pas être déduite d'une compilation réussie.
+Mettre à jour la version Cargo et le lockfile ensemble avant un nouveau tag. Committer les fichiers validés avant l'empaquetage : `REVISION` identifie le commit HEAD. L'archive et `SHA256SUMS` sont produits dans `target/release-assets/`. Les notes du brouillon viennent de `docs/release-notes.md`, complétées par le commit construit. Pour publier la première version, pousser le commit validé puis le tag `v0.1.0`, examiner le workflow et télécharger le brouillon avec `gh release download` (voir [installation et validation sur Pi](alpine.md)). Publier manuellement seulement après validation matérielle ; cette étape ne doit pas être déduite d'une compilation réussie.
+
+Un tag publié ne doit pas être déplacé. Pour la reconstruction exceptionnelle du brouillon initial `v0.1.0`, vérifier son statut, sauvegarder sa référence et ses fichiers, attendre la fin des workflows de release, puis remplacer uniquement ce tag avec un lease sur sa référence distante vérifiée. Revérifier le statut brouillon avant remplacement et ne pas lancer de reconstruction concurrente. Les mises à jour suivantes utilisent un nouveau numéro de version.
 
 Avec cette chaîne, Zig peut signaler `ignoring deprecated linker optimization setting '1'` à l'édition de liens. La compilation réussit et l'ELF est inspecté ; cet avertissement de l'outil reste visible et n'est pas une validation d'exécution ARM64. Clippy doit toujours rester sans avertissement.
 

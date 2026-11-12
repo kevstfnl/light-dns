@@ -2,4 +2,3 @@
 /data/filters/
 /light-dns.sock
 /.env
-__pycache__/

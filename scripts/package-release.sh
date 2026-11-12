@@ -3,7 +3,8 @@
 set -eu
 [ "$#" -eq 1 ] || { echo "Usage: $0 vX.Y.Z" >&2; exit 1; }
 tag=$1
-version=$(python3 -c 'import tomllib; print(tomllib.load(open("Cargo.toml", "rb"))["package"]["version"])')
+metadata=$(cargo metadata --locked --no-deps --format-version 1)
+version=$(printf '%s\n' "$metadata" | jq -er '.packages[] | select(.name == "light-dns") | .version')
 [ "$tag" = "v$version" ] || { echo 'Tag et version Cargo différents' >&2; exit 1; }
 printf '%s\n' "$tag" | LC_ALL=C grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$' || exit 1
 target=aarch64-unknown-linux-musl

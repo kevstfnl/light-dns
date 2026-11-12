@@ -32,7 +32,7 @@ jobs:
           ref: ${{ inputs.tag && format('refs/tags/{0}', inputs.tag) || github.ref }}
           persist-credentials: false
       - run: rustup toolchain install 1.99.1 --profile minimal --component rustfmt --component clippy
-      - run: sudo apt-get update && sudo apt-get install -y build-essential cmake
+      - run: sudo apt-get update && sudo apt-get install -y build-essential cmake jq
       - name: Install validated ShellCheck version
         run: |
           curl --proto '=https' --tlsv1.2 -fSL --retry 3 --connect-timeout 20 --max-time 120 https://github.com/koalaman/shellcheck/releases/download/v0.11.0/shellcheck-v0.11.0.linux.x86_64.tar.xz -o "$RUNNER_TEMP/shellcheck.tar.xz"
@@ -45,7 +45,6 @@ jobs:
       - run: cargo check --locked
       - run: shellcheck packaging/alpine/install.sh scripts/setup-release-tools.sh scripts/package-release.sh
       - run: sh -n packaging/alpine/light-dns.initd
-      - run: python3 -m unittest discover -s tests/packaging -v
 
   build:
     needs: check
@@ -56,19 +55,20 @@ jobs:
         with:
           ref: ${{ inputs.tag && format('refs/tags/{0}', inputs.tag) || github.ref }}
           persist-credentials: false
+      - run: rustup toolchain install 1.99.1 --profile minimal --target aarch64-unknown-linux-musl
+      - run: sudo apt-get update && sudo apt-get install -y build-essential binutils jq
       - name: Validate version
         env:
           REQUESTED_TAG: ${{ inputs.tag || (startsWith(github.ref, 'refs/tags/') && github.ref_name) || '' }}
         run: |
-          version=$(python3 -c 'import tomllib; print(tomllib.load(open("Cargo.toml", "rb"))["package"]["version"])')
+          metadata=$(cargo metadata --locked --no-deps --format-version 1)
+          version=$(jq -er '.packages[] | select(.name == "light-dns") | .version' <<< "$metadata")
           tag="${REQUESTED_TAG:-v$version}"
           if [[ ! "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || [[ "$tag" != "v$version" ]]; then
             echo 'Tag invalide ou différent de la version Cargo' >&2
             exit 1
           fi
           printf 'RELEASE_TAG=%s\n' "$tag" >> "$GITHUB_ENV"
-      - run: rustup toolchain install 1.99.1 --profile minimal --target aarch64-unknown-linux-musl
-      - run: sudo apt-get update && sudo apt-get install -y build-essential binutils
       - name: Install pinned cross-compilation tools
         run: |
           sh scripts/setup-release-tools.sh "$RUNNER_TEMP/release-tools"
@@ -111,9 +111,10 @@ jobs:
           set -euo pipefail
           [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
           (cd target/release-assets && sha256sum -c SHA256SUMS)
-          printf 'Alpine Linux aarch64, binaire musl statique.\n\nCommit : %s\n\nValidation sur Raspberry Pi 5 par le mainteneur requise avant publication. Voir INSTALL.md dans le fichier tar.gz.\n' "$(git rev-parse HEAD)" > "$RUNNER_TEMP/release-notes.md"
-          if gh release view "$TAG" --json isDraft > "$RUNNER_TEMP/release.json"; then
-            python3 -c 'import json,sys; sys.exit(0 if json.load(open(sys.argv[1]))["isDraft"] else "Refus de modifier une release publiée")' "$RUNNER_TEMP/release.json"
+          cat docs/release-notes.md > "$RUNNER_TEMP/release-notes.md"
+          printf '\nCommit : %s\n' "$(git rev-parse HEAD)" >> "$RUNNER_TEMP/release-notes.md"
+          if gh release view "$TAG" --json isDraft --jq '.isDraft' > "$RUNNER_TEMP/is-draft"; then
+            [[ "$(cat "$RUNNER_TEMP/is-draft")" == true ]] || { echo 'Refus de modifier une release publiée' >&2; exit 1; }
             gh release edit "$TAG" --notes-file "$RUNNER_TEMP/release-notes.md"
           else
             gh release create "$TAG" --verify-tag --draft --title "$TAG" --notes-file "$RUNNER_TEMP/release-notes.md"

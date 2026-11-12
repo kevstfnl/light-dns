@@ -3,6 +3,8 @@
 light-dns est un serveur DNS headless léger, écrit en Rust pour Linux.
 Il fournit le filtrage de domaines, les rewrites locaux, un cache à TTL et le forwarding UDP/TCP, en IPv4 et IPv6.
 
+Pour une première installation sur **Raspberry Pi 5 sous Alpine Linux 64 bits**, utiliser l'archive native avec OpenRC : suivre le [guide Alpine](docs/alpine.md). Aucun compilateur, Docker ni Python n'est nécessaire sur le Pi. La première release reste en brouillon jusqu'à validation matérielle par le mainteneur ; le guide explique comment la récupérer avant publication.
+
 ## Docker Compose
 
 Prérequis : Git, Docker et Docker Compose.
