@@ -22,7 +22,7 @@ upstream_timeout_ms = 2000
 # bloque les wildcards plus généraux (ex. child.router.lan répond NXDOMAIN).
 # Les zones wildcard, apex inclus, ne sont jamais transmises aux upstreams.
 [rewrites]
-"*.lan" = "192.168.1.10"
+"*.home.arpa" = "192.168.1.10"
 # Règle exacte prioritaire sur *.lan.
 "router.lan" = "192.168.1.1"
 # Ce nom répond en AAAA ; une requête A reçoit une réponse vide, sans repli wildcard.
