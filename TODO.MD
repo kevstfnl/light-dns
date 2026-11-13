@@ -23,3 +23,22 @@ Procédures : [maintenance](docs/maintenance.md), [installation et validation Al
 - [ ] Validation physique par le mainteneur : installation sys Alpine AArch64, reboot, mise à jour/rollback et purge interactive sur Raspberry Pi 5. Aucun essai ARM64 effectué.
 
 - [x] Simplifier le README (160 → 49 lignes) et déplacer les détails Docker, développement et utilisation dans `docs/` ; exemple TOML toujours testé, liens locaux vérifiés, fmt/Clippy/check validés et 149 tests réussis (10 ignorés) le 2026-11-12.
+
+## Correctif CLI préparé — 2026-11-13
+
+- [x] Administration : priorité à `--socket`, puis à l’entrée locale présente, puis à la socket OpenRC présente ; aucun repli après erreur et aucun changement des chemins du serveur.
+- [x] Raccourcir la commande README : téléchargement complet en mémoire avant exécution, sans fichier temporaire ni pipeline ; échec de téléchargement testé.
+- [x] fmt, Clippy sans avertissement et check avec lockfile validés ; relance complète : 153 tests réussis, 10 ignorés. Le premier passage a rencontré deux échecs intermittents dans les tests de verrouillage existants, absents à la relance complète.
+- [ ] Publier le correctif dans une nouvelle version ; la bêta v0.2.0-beta.2 exige encore `--socket` pour OpenRC.
+
+## État du cache et présentation — 2026-11-13
+
+- [x] Ajouter `light-dns cache status` (TOML) : activation, entrées, mémoire pondérée, limites, TTL maximal, hits et vidages cumulés ; socket automatique et priorité explicite conservées.
+- [x] Vérifier avec fixtures locales : vide, rempli, hit, lecture sans requête DNS, vidage et désactivation par reload ; aucune dépendance ajoutée ni modification du chemin des requêtes DNS.
+- [x] Rendre le README plus lisible avec navigation, fonctionnalités mises en évidence et sections séparées ; conserver les détails dans `docs/`.
+- [x] fmt, Clippy sans avertissement, check avec lockfile et 153 tests validés (10 ignorés) ; commande cache status destinée à v0.2.0-beta.3.
+
+## Publication v0.2.0-beta.3 — 2026-11-13
+
+- [ ] Valider la CI complète, publier la prerelease et vérifier les téléchargements anonymes avec SHA-256.
+- [ ] Confirmer la sélection de la bêta 3 par la CLI de la bêta 2 sans mutation système.

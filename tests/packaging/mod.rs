@@ -323,3 +323,40 @@ else cp '{}/downloaded-binary' "$destination"; fi
     }));
     Ok(())
 }
+
+#[test]
+fn readme_install_command_never_executes_an_interrupted_download() -> TestResult {
+    let fixture = Fixture::new(false)?;
+    let wget = fixture.root().join("bin/wget");
+    fs::write(
+        &wget,
+        r#"#!/bin/sh
+printf '%s\n' 'printf installed > "$FIXTURE_ROOT/installed"'
+exit "${FIXTURE_EXIT:-0}"
+"#,
+    )?;
+    fs::set_permissions(wget, fs::Permissions::from_mode(0o755))?;
+    let command = include_str!("../../README.md")
+        .split_once("```sh\n")
+        .ok_or("missing installation command")?
+        .1
+        .split_once("```")
+        .ok_or("unterminated installation command")?
+        .0;
+    let paths = std::env::join_paths([
+        fixture.root().join("bin"),
+        PathBuf::from("/usr/bin"),
+        PathBuf::from("/bin"),
+    ])?;
+    for (code, expected) in [("1", false), ("0", true)] {
+        let output = Command::new("sh")
+            .args(["-c", command])
+            .env("PATH", &paths)
+            .env("FIXTURE_ROOT", fixture.root())
+            .env("FIXTURE_EXIT", code)
+            .output()?;
+        assert_eq!(output.status.success(), expected);
+        assert_eq!(fixture.root().join("installed").exists(), expected);
+    }
+    Ok(())
+}

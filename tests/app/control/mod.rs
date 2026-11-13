@@ -96,6 +96,16 @@ impl Daemon {
         Ok(toml::from_str(&String::from_utf8(output.stdout)?)?)
     }
 
+    async fn cache_status(&self) -> TestResult<toml::Table> {
+        let output = self.command(&["cache", "status"]).await?;
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        Ok(toml::from_str(&String::from_utf8(output.stdout)?)?)
+    }
+
     async fn replace_config(&self, content: &str) -> TestResult {
         let path = self.directory.0.join("settings.toml");
         tokio::fs::write(path.with_extension("new"), content).await?;
@@ -124,6 +134,13 @@ async fn cli_clears_cache_reports_stats_and_reloads_without_closing_tcp() -> Tes
     let upstream = Upstream::start(answer, answer).await?;
     let next_upstream = Upstream::start(next, next).await?;
     let daemon = Daemon::new(upstream.address).await?;
+    let initial = daemon.cache_status().await?;
+    assert_eq!(initial["enabled"].as_bool(), Some(true));
+    assert_eq!(initial["entries"].as_integer(), Some(0));
+    assert_eq!(initial["hits"].as_integer(), Some(0));
+    assert_eq!(initial["max_entries"].as_integer(), Some(4096));
+    assert_eq!(initial["max_memory_bytes"].as_integer(), Some(8388608));
+    assert_eq!(initial["max_ttl_secs"].as_integer(), Some(86400));
     let request = query("public.test.")?;
     for _ in 0..2 {
         udp(daemon.address, &request).await?;
@@ -137,7 +154,22 @@ async fn cli_clears_cache_reports_stats_and_reloads_without_closing_tcp() -> Tes
     ] {
         assert_eq!(stats[key].as_integer(), Some(value));
     }
+    let cache = daemon.cache_status().await?;
+    assert_eq!(cache["entries"].as_integer(), Some(1));
+    assert_eq!(cache["hits"].as_integer(), Some(1));
+    assert!(cache["estimated_bytes"].as_integer().is_some_and(|n| n > 0));
+    // Reporting leaves the cached response intact and does not issue DNS queries.
+    assert_eq!(
+        daemon.cache_status().await?["entries"].as_integer(),
+        Some(1)
+    );
+    assert_eq!(daemon.stats().await?["requests"].as_integer(), Some(2));
     assert!(daemon.command(&["cache", "clear"]).await?.status.success());
+    let cleared = daemon.cache_status().await?;
+    assert_eq!(cleared["entries"].as_integer(), Some(0));
+    assert_eq!(cleared["estimated_bytes"].as_integer(), Some(0));
+    assert_eq!(cleared["clears"].as_integer(), Some(1));
+    assert_eq!(cleared["hits"].as_integer(), Some(1));
     assert_eq!(daemon.stats().await?["cache_entries"].as_integer(), Some(0));
     udp(daemon.address, &request).await?;
     assert_eq!(daemon.stats().await?["forwarded"].as_integer(), Some(2));
@@ -232,6 +264,10 @@ async fn reload_replaces_filtering_and_cache_settings() -> TestResult {
     let stats = daemon.stats().await?;
     assert_eq!(stats["cache_entries"].as_integer(), Some(0));
     assert_eq!(stats["forwarded"].as_integer(), Some(2));
+    let disabled = daemon.cache_status().await?;
+    assert_eq!(disabled["enabled"].as_bool(), Some(false));
+    assert_eq!(disabled["entries"].as_integer(), Some(0));
+    assert_eq!(disabled["estimated_bytes"].as_integer(), Some(0));
     Ok(())
 }
 

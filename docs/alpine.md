@@ -6,14 +6,14 @@ Installation prévue pour Alpine 64 bits (`uname -m` : `aarch64`), stockage pers
 
 Depuis un shell root, utiliser la commande du [README](../README.md#installation-rapide--alpine-linux--raspberry-pi-5). Elle exige une release publique : un brouillon GitHub ne fonctionne pas avec les téléchargements anonymes.
 
-Le bootstrap épinglé télécharge le binaire et `SHA256SUMS`, vérifie la somme du seul binaire attendu dans un dossier temporaire privé, puis lance `light-dns install`. Il nettoie ses téléchargements après succès ou échec. Le script distant s’exécute en root : inspecter sa source et utiliser la méthode suivante si cette confiance n’est pas appropriée.
+Le bootstrap épinglé télécharge le binaire et `SHA256SUMS`, vérifie la somme du seul binaire attendu dans un dossier temporaire privé, puis lance `light-dns install`. Il nettoie ses téléchargements après succès ou échec. La commande télécharge entièrement le script en mémoire avant de l’exécuter, uniquement si wget réussit. Depuis un compte autorisé, utiliser d’abord `doas -s` pour obtenir un shell root. Le script distant s’exécute en root : inspecter sa source et utiliser la méthode suivante si cette confiance n’est pas appropriée.
 
 ## Installation manuelle avec vérification
 
 Depuis un shell root :
 
 ```sh
-version=v0.2.0-beta.2
+version=v0.2.0-beta.3
 base="https://github.com/kevstfnl/light-dns/releases/download/$version"
 name="light-dns-$version-aarch64-unknown-linux-musl"
 mkdir -m 700 light-dns-download
@@ -41,10 +41,10 @@ rc-service light-dns status
 rc-service light-dns stop
 rc-service light-dns start
 rc-service light-dns restart
-light-dns --socket /run/light-dns/control.sock health
-light-dns --socket /run/light-dns/control.sock health --upstream
-light-dns --socket /run/light-dns/control.sock stats
-light-dns --socket /run/light-dns/control.sock cache clear
+light-dns health
+light-dns health --upstream
+light-dns stats
+light-dns cache clear
 ```
 
 Éditer `/etc/light-dns/config.toml` pour choisir l’adresse LAN et les upstreams. Pour IPv6, utiliser `[adresse]:53`. Un changement d’écoute exige un redémarrage. Sinon `rc-service light-dns reload` relit explicitement le TOML ; aucun watcher n’est installé. Configurer ensuite les clients ou le DHCP manuellement et ne pas exposer le DNS à Internet.
@@ -59,7 +59,7 @@ Seule la capacité `CAP_NET_BIND_SERVICE` est accordée, lorsque le port configu
 light-dns version
 light-dns update --check
 light-dns update
-light-dns update --version v0.2.0-beta.2
+light-dns update --version v0.2.0-beta.3
 ```
 
 Les releases publiques stables et bêta compatibles sont comparées selon SemVer, sans rétrogradation automatique. `--version` permet de choisir explicitement une version antérieure. `--check` ne demande pas root et ne modifie rien. Les limites GitHub anonymes ou une panne réseau produisent une erreur explicite.

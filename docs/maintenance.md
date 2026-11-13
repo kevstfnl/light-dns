@@ -86,30 +86,29 @@ L’image publiée est `<hôte-forgejo>/<propriétaire>/<dépôt>:<image_tag>` e
 
 ## Releases GitHub Alpine ARM64
 
-`.github/workflows/release.yml` vérifie le projet sur Linux AMD64, compile vers `aarch64-unknown-linux-musl`, inspecte l'ELF sans l'exécuter et conserve l'archive en artefact. Les PR et les pushes sur `main` ne créent aucune release. Un push de tag `vX.Y.Z` correspondant à la version Cargo crée un brouillon ; `workflow_dispatch` permet de reconstruire un tag existant. Une release publiée n'est jamais remplacée par ce workflow.
+`.github/workflows/release.yml` vérifie fmt, Clippy, les tests Rust, check avec lockfile et les scripts shell sur Linux AMD64. Il construit les binaires musl AArch64 et AMD64, puis vérifie OpenRC dans Alpine AMD64 : exécution non-root, capacité minimale, santé UDP/TCP, administration sans `--socket`, état et vidage du cache, reload et arrêt. Aucun binaire ARM n’est exécuté.
 
-Les actions sont figées par SHA. Les outils de compilation sont Rust 1.99.1, cargo-zigbuild 0.23.4, Zig 0.15.2 et CMake 4.4.5 ; les archives des trois derniers sont vérifiées par SHA-256. ShellCheck 0.11.0 est également figé et vérifié par SHA-256, afin d'utiliser la même version en local et en CI. Le jeton GitHub intégré suffit : seul le job de brouillon a `contents: write`.
+Les PR et pushes sur `main` ne créent aucune release. Un tag `vX.Y.Z` ou préversion correspondant à Cargo déclenche la publication après ces contrôles. Le job final crée un brouillon, vérifie les sommes, charge les cinq assets puis publie ; les préversions sont marquées prerelease. Une release publiée n’est jamais remplacée. `workflow_dispatch` permet de reprendre un tag existant dont la release n’est pas encore publiée.
 
-Les huit tests de packaging sont intégrés à `cargo test --locked` sur Linux. Ils simulent les commandes système dans des dossiers temporaires, sans compte, paquet ni service réel. Ils nécessitent `sh`, `jq`, `tar`, `sha256sum` et GNU `install` sur l'hôte de test AMD64.
+Les actions sont figées par SHA. Outils : Rust 1.99.1, cargo-zigbuild 0.23.4, Zig 0.15.2, CMake 4.4.5 et ShellCheck 0.11.0. Les archives d’outils sont vérifiées par SHA-256. Le job de publication utilise l’API REST avec le jeton GitHub intégré et `contents: write` ; aucune GitHub CLI n’est nécessaire.
 
-Reproduction depuis Linux AMD64 avec rustup, Git, jq, curl, tar, xz, binutils et les outils C/make :
+Reproduction depuis Linux AMD64 avec les outils Rust, C/make, Git, jq, curl, tar, xz et binutils :
 
 ```sh
-rustup toolchain install 1.99.1 --profile minimal --target aarch64-unknown-linux-musl
+rustup toolchain install 1.99.1 --profile minimal --target aarch64-unknown-linux-musl,x86_64-unknown-linux-musl
 sh scripts/setup-release-tools.sh "$PWD/target/release-tools"
 export PATH="$PWD/target/release-tools/cargo-zigbuild:$PWD/target/release-tools/zig:$PWD/target/release-tools/cmake/bin:$PATH"
-RUSTUP_TOOLCHAIN=1.99.1 RUSTFLAGS=-Dwarnings cargo zigbuild --release --locked --target aarch64-unknown-linux-musl
-sh scripts/package-release.sh v0.1.0
+RUSTUP_TOOLCHAIN=1.99.1 RUSTFLAGS=-Dwarnings cargo zigbuild --release --locked --target aarch64-unknown-linux-musl --target x86_64-unknown-linux-musl
+cargo test --locked --test integration alpine_openrc -- --ignored
+sh scripts/package-release.sh v0.2.0-beta.3
 cargo test --locked --test integration packaging::
-shellcheck packaging/alpine/install.sh scripts/setup-release-tools.sh scripts/package-release.sh
+shellcheck packaging/alpine/bootstrap.sh packaging/alpine/install.sh scripts/setup-release-tools.sh scripts/package-release.sh
 sh -n packaging/alpine/light-dns.initd
 actionlint .github/workflows/release.yml
 ```
 
-Mettre à jour la version Cargo et le lockfile ensemble avant un nouveau tag. Committer les fichiers validés avant l'empaquetage : `REVISION` identifie le commit HEAD. L'archive et `SHA256SUMS` sont produits dans `target/release-assets/`. Les notes du brouillon viennent de `docs/release-notes.md`, complétées par le commit construit. Pour publier la première version, pousser le commit validé puis le tag `v0.1.0`, examiner le workflow et télécharger le brouillon avec `gh release download` (voir [installation et validation sur Pi](alpine.md)). Publier manuellement seulement après validation matérielle ; cette étape ne doit pas être déduite d'une compilation réussie.
+Mettre à jour Cargo, son lockfile, la version du bootstrap et les exemples ensemble. Committer les fichiers validés avant d’empaqueter : `REVISION` identifie HEAD. Les assets et `SHA256SUMS` sont produits dans `target/release-assets/`. Les notes viennent de `docs/release-notes.md`. Après publication, vérifier les téléchargements anonymes et les sommes, puis la sélection de la nouvelle version par `update --check`. Consigner les résultats dans `TODO.MD`.
 
-Un tag publié ne doit pas être déplacé. Pour la reconstruction exceptionnelle du brouillon initial `v0.1.0`, vérifier son statut, sauvegarder sa référence et ses fichiers, attendre la fin des workflows de release, puis remplacer uniquement ce tag avec un lease sur sa référence distante vérifiée. Revérifier le statut brouillon avant remplacement et ne pas lancer de reconstruction concurrente. Les mises à jour suivantes utilisent un nouveau numéro de version.
+Un tag publié ne doit pas être déplacé : utiliser un nouveau numéro pour tout correctif. Zig peut signaler `ignoring deprecated linker optimization setting '1'` à l’édition de liens ; cet avertissement reste visible, et Clippy doit rester sans avertissement.
 
-Avec cette chaîne, Zig peut signaler `ignoring deprecated linker optimization setting '1'` à l'édition de liens. La compilation réussit et l'ELF est inspecté ; cet avertissement de l'outil reste visible et n'est pas une validation d'exécution ARM64. Clippy doit toujours rester sans avertissement.
-
-ARM64, Alpine et Raspberry Pi restent une validation manuelle du mainteneur, avant remplacement d’AdGuard Home. Aucune mesure AMD64 ni fixture locale ne la remplace.
+La compilation croisée et les essais AMD64 ne remplacent pas les validations matérielles du mainteneur sur Raspberry Pi, notamment reboot, mise à jour/rollback et purge. Voir le [guide Alpine](alpine.md).

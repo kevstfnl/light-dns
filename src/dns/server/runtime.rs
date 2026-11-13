@@ -1,4 +1,4 @@
-use super::stats::{Counters, ServerStats};
+use super::stats::{CacheStatus, Counters, ServerStats};
 use crate::{
     config::Config,
     dns::{cache::ResponseCache, forwarder::Forwarder, rewrites::Rewrites},
@@ -101,6 +101,29 @@ impl Runtime {
         // Les requêtes en vol gardent leur ancien cache, désormais inaccessible.
         resolver.cache.store(Arc::new(empty));
         Counters::increment(&self.counters.cache_clears);
+    }
+
+    pub async fn cache_status(&self) -> CacheStatus {
+        let resolver = self.current.load_full();
+        let cache = resolver.cache.load_full();
+        let usage = cache.stats().await;
+        let config = cache.config();
+        CacheStatus {
+            enabled: config.enabled,
+            entries: usage.entries,
+            max_entries: config.max_entries,
+            estimated_bytes: usage.estimated_bytes,
+            max_memory_bytes: config.max_memory_bytes,
+            max_ttl_secs: config.max_ttl.as_secs(),
+            hits: self
+                .counters
+                .cache_hits
+                .load(std::sync::atomic::Ordering::Relaxed),
+            clears: self
+                .counters
+                .cache_clears
+                .load(std::sync::atomic::Ordering::Relaxed),
+        }
     }
 
     pub async fn stats(&self) -> ServerStats {

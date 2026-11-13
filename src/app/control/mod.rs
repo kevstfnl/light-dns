@@ -61,6 +61,9 @@ async fn execute(
 ) -> io::Result<String> {
     let command = timeout(IO_TIMEOUT, read_frame(stream, 64)).await??;
     match command.as_slice() {
+        b"cache status\n" => {
+            toml::to_string(&control.cache_status().await).map_err(io::Error::other)
+        }
         b"cache clear\n" => {
             control.clear_cache().await;
             Ok("cache DNS vidé\n".into())
@@ -89,6 +92,7 @@ async fn execute(
 
 pub(super) async fn request(path: PathBuf, command: Command) -> io::Result<String> {
     let text = match command {
+        Command::CacheStatus => b"cache status\n".as_slice(),
         Command::ClearCache => b"cache clear\n".as_slice(),
         Command::Reload => b"reload\n".as_slice(),
         Command::Stats => b"stats\n".as_slice(),

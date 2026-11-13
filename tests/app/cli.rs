@@ -11,7 +11,7 @@ fn help_usage_errors_and_unavailable_daemon_are_reported_without_config() -> Tes
             .output()?;
         assert!(output.status.success());
         let text = String::from_utf8(output.stdout)?;
-        for word in ["cache clear", "reload", "stats"] {
+        for word in ["cache clear", "cache status", "reload", "stats"] {
             assert!(text.contains(word));
         }
     }

@@ -9,7 +9,7 @@ use crate::config::Config;
 use handler::Handler;
 use hickory_server::{Server, net::NetError};
 use runtime::Runtime;
-pub use stats::ServerStats;
+pub use stats::{CacheStatus, ServerStats};
 use std::{io, net::SocketAddr, sync::Arc, time::Duration};
 use tokio::net::{TcpListener, UdpSocket};
 
@@ -40,6 +40,10 @@ impl DnsControl {
 
     pub async fn clear_cache(&self) {
         self.runtime.clear_cache().await;
+    }
+
+    pub async fn cache_status(&self) -> CacheStatus {
+        self.runtime.cache_status().await
     }
 
     pub async fn stats(&self) -> ServerStats {

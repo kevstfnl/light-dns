@@ -163,6 +163,10 @@ impl ResponseCache {
             .await;
     }
 
+    pub(crate) fn config(&self) -> &CacheConfig {
+        &self.config
+    }
+
     pub(crate) async fn stats(&self) -> CacheStats {
         if let Some(cache) = &self.entries {
             cache.run_pending_tasks().await;

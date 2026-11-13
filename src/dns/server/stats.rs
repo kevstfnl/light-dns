@@ -73,3 +73,16 @@ impl Counters {
         }
     }
 }
+
+/// État indicatif de la génération active ; compteurs cumulés depuis le démarrage.
+#[derive(Debug, Serialize)]
+pub struct CacheStatus {
+    pub enabled: bool,
+    pub entries: u64,
+    pub max_entries: u64,
+    pub estimated_bytes: u64,
+    pub max_memory_bytes: u64,
+    pub max_ttl_secs: u64,
+    pub hits: u64,
+    pub clears: u64,
+}

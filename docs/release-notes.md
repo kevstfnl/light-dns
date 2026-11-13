@@ -1,15 +1,13 @@
-# light-dns v0.2.0-beta.2
+# light-dns v0.2.0-beta.3
 
-Bêta publique pour Alpine Linux AArch64 en installation sys avec OpenRC.
+Bêta publique pour Alpine Linux AArch64 (installation sys, OpenRC).
 
-Cette bêta remplace v0.2.0-beta.1 : la méthode manuelle extrait désormais l’archive dans un sous-dossier pour éviter la collision avec le nom du binaire brut téléchargé. Le mécanisme de mise à jour reste compatible.
+- Administration sans `--socket` : priorité au chemin explicite, puis à la socket locale présente, puis à `/run/light-dns/control.sock`. Aucun repli après échec sur la socket sélectionnée ; les chemins du serveur restent inchangés.
+- Nouvelle commande `light-dns cache status` : activation, entrées, mémoire pondérée, limites, TTL maximal, hits et vidages cumulés, au format TOML.
+- Commande d’installation raccourcie : téléchargement complet du bootstrap avant exécution, sans pipeline ni fichier temporaire pour le script.
+- README réorganisé et guides détaillés dans `docs/`.
+- Configuration, données, commandes DNS existantes et mécanisme de mise à jour/rollback conservés ; aucune dépendance ajoutée.
 
-- CLI autonome : installation, mise à jour avec vérification SHA-256 et rollback, désinstallation et purge confirmée.
-- Bootstrap POSIX BusyBox et installation manuelle vérifiée ; aucun compilateur, Git, GitHub CLI ou Docker sur le Pi.
-- Service non-root, capacité réseau conditionnelle, configuration et données conservées.
-- Releases stables et bêta reconnues ; sélection explicite et vérification sans mutation.
-- Fonctions DNS et configuration TOML existantes conservées.
+Depuis la bêta 2, lancer en root `light-dns update`, puis `light-dns health` et `light-dns cache status`.
 
-Assets : binaire musl statique AArch64, archive manuelle, bootstrap, service OpenRC et `SHA256SUMS`. Consulter le README et le guide Alpine avant installation.
-
-**Raspberry Pi physique et exécution Alpine AArch64 non validés.** La compilation croisée et la CI AMD64 ne remplacent pas les essais matériels du mainteneur. Ne pas basculer les clients DNS avant ses propres vérifications. Les validations restantes figurent dans `TODO.MD`.
+Assets : binaire musl statique AArch64, archive manuelle, bootstrap, service OpenRC et SHA256SUMS. Les tests automatiques et le service OpenRC sont validés sur AMD64 avant publication. La compilation croisée ne valide pas l’exécution sur Pi physique. Un premier démarrage fonctionnel sur Pi a été rapporté pour la bêta 2 ; la validation matérielle complète (reboot, mise à jour/rollback, purge) reste à effectuer par le mainteneur.

@@ -28,19 +28,22 @@ rc-update add light-dns default
 rc-service -D light-dns start
 trap 'rc-service -D light-dns stop >/dev/null 2>&1 || true' 0
 for attempt in 1 2 3 4 5; do
-    if light-dns --socket /run/light-dns/control.sock health; then break; fi
+    if light-dns health; then break; fi
     sleep 1
 done
-light-dns --socket /run/light-dns/control.sock health
+light-dns health
 rc-service -D light-dns status
 pid=$(pidof light-dns)
 awk '/^Uid:/ { if ($2 == 0 || $3 == 0) exit 1; found=1 } END { if (!found) exit 1 }' "/proc/$pid/status"
 grep -q '^CapEff:.*0000000000000400$' "/proc/$pid/status"
-su -s /bin/sh -c 'light-dns --socket /run/light-dns/control.sock health' light-dns
+su -s /bin/sh -c 'light-dns health' light-dns
 if su -s /bin/sh -c 'light-dns install' light-dns; then exit 1; fi
+light-dns stats >/dev/null
+light-dns cache status | grep -q '^enabled = true$'
+light-dns cache clear
 rc-service -D light-dns reload
 rc-service -D light-dns restart
-light-dns --socket /run/light-dns/control.sock health
+light-dns health
 rc-service -D light-dns stop
 if rc-service -D light-dns status; then exit 1; else [ "$?" -eq 3 ]; fi
 trap - 0

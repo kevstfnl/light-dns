@@ -11,7 +11,7 @@ command -v rc-service >/dev/null 2>&1 || fail 'OpenRC requis.'
 for tool in wget sha256sum mktemp; do
     command -v "$tool" >/dev/null 2>&1 || fail "Outil BusyBox absent : $tool"
 done
-version=v0.2.0-beta.2
+version=v0.2.0-beta.3
 name="light-dns-$version-aarch64-unknown-linux-musl"
 base="https://github.com/kevstfnl/light-dns/releases/download/$version"
 temporary=$(mktemp -d /tmp/light-dns-bootstrap.XXXXXX) || fail 'Création du dossier temporaire impossible.'
