@@ -29,7 +29,7 @@ Procédures : [maintenance](docs/maintenance.md), [installation et validation Al
 - [x] Administration : priorité à `--socket`, puis à l’entrée locale présente, puis à la socket OpenRC présente ; aucun repli après erreur et aucun changement des chemins du serveur.
 - [x] Raccourcir la commande README : téléchargement complet en mémoire avant exécution, sans fichier temporaire ni pipeline ; échec de téléchargement testé.
 - [x] fmt, Clippy sans avertissement et check avec lockfile validés ; relance complète : 153 tests réussis, 10 ignorés. Le premier passage a rencontré deux échecs intermittents dans les tests de verrouillage existants, absents à la relance complète.
-- [ ] Publier le correctif dans une nouvelle version ; la bêta v0.2.0-beta.2 exige encore `--socket` pour OpenRC.
+- [x] Correctif publié dans v0.2.0-beta.3 ; la bêta v0.2.0-beta.2 exige encore `--socket` pour OpenRC.
 
 ## État du cache et présentation — 2026-11-13
 
@@ -40,5 +40,5 @@ Procédures : [maintenance](docs/maintenance.md), [installation et validation Al
 
 ## Publication v0.2.0-beta.3 — 2026-11-13
 
-- [ ] Valider la CI complète, publier la prerelease et vérifier les téléchargements anonymes avec SHA-256.
-- [ ] Confirmer la sélection de la bêta 3 par la CLI de la bêta 2 sans mutation système.
+- [x] CI complète réussie (run 43413226014), prerelease publique publiée ; les cinq assets téléchargés anonymement dans Alpine AMD64, sommes SHA-256 et extraction vérifiées. Aucun binaire ARM exécuté.
+- [x] CLI AMD64 de la bêta 2 : `update --check` affiche « Installée : 0.2.0-beta.2 ; disponible : 0.2.0-beta.3 », sans mutation système.
