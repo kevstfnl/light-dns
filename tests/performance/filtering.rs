@@ -12,7 +12,7 @@ use std::{
     time::{Duration, Instant},
 };
 use tokio::{
-    net::{TcpListener, TcpStream, UdpSocket},
+    net::{TcpStream, UdpSocket},
     time::{sleep, timeout},
 };
 
@@ -92,9 +92,7 @@ async fn measure(
 ) -> TestResult<(String, bool)> {
     let directory = TestDirectory::new()?;
     let upstream = Upstream::start(response, response).await?;
-    let reserve = UdpSocket::bind("127.0.0.1:0").await?;
-    let address = reserve.local_addr()?;
-    let tcp = TcpListener::bind(address).await?;
+    let (reserve, tcp, address) = fixture_transports("127.0.0.1:0".parse()?).await?;
     let list = directory.0.join("list.txt");
     let mut text = base.to_owned();
     if case.advanced {
@@ -528,6 +526,25 @@ async fn dns_filtering() -> TestResult {
             advanced: false,
         },
     ];
+    // Permit isolated comparisons when another transport/scenario fails. The
+    // default remains the complete campaign; unknown names must never be ignored.
+    let selected = std::env::var("LIGHT_DNS_BENCH_SCENARIOS").ok();
+    let cases: Vec<_> = match &selected {
+        Some(names) => {
+            let names: Vec<_> = names.split(',').collect();
+            if names
+                .iter()
+                .any(|name| !cases.iter().any(|case| case.name == *name))
+            {
+                return Err(io::Error::other("scénario de filtrage inconnu").into());
+            }
+            cases
+                .into_iter()
+                .filter(|case| names.contains(&case.name))
+                .collect()
+        }
+        None => cases.into(),
+    };
     let output = std::env::var_os("LIGHT_DNS_BENCH_CSV")
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("target/benchmarks/filtering.csv"));

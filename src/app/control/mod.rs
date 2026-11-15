@@ -1,3 +1,4 @@
+mod process;
 mod socket;
 
 use super::cli::Command;
@@ -82,7 +83,15 @@ async fn execute(
             control.health(command == b"health upstream\n").await?;
             Ok("DNS disponible\n".into())
         }
-        b"stats\n" => toml::to_string(&control.stats().await).map_err(io::Error::other),
+        b"stats\n" => {
+            let mut stats =
+                toml::Table::try_from(control.stats().await).map_err(io::Error::other)?;
+            stats.insert(
+                "process".into(),
+                toml::Value::try_from(process::Process::read().await).map_err(io::Error::other)?,
+            );
+            toml::to_string(&stats).map_err(io::Error::other)
+        }
         _ => Err(io::Error::new(
             io::ErrorKind::InvalidInput,
             "commande de contrôle inconnue",
@@ -90,7 +99,7 @@ async fn execute(
     }
 }
 
-pub(super) async fn request(path: PathBuf, command: Command) -> io::Result<String> {
+pub(super) async fn request(path: PathBuf, command: &Command) -> io::Result<String> {
     let text = match command {
         Command::CacheStatus => b"cache status\n".as_slice(),
         Command::ClearCache => b"cache clear\n".as_slice(),
@@ -106,7 +115,7 @@ pub(super) async fn request(path: PathBuf, command: Command) -> io::Result<Strin
         }
     };
     timeout(COMMAND_TIMEOUT + IO_TIMEOUT, async {
-        let mut stream = UnixStream::connect(path).await?;
+        let mut stream = UnixStream::connect(&path).await.map_err(|error| io::Error::new(error.kind(), format!("connexion à {} : {error}. Vérifier que le service est démarré et la socket accessible ; utiliser --socket pour choisir une instance.", path.display())))?;
         stream.write_all(text).await?;
         let response = socket::read_response(&mut stream, 16384).await?;
         if let Some(body) = response.strip_prefix("OK\n") {

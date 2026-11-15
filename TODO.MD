@@ -1,5 +1,11 @@
 # Validations restantes
 
+- [x] Améliorer la CLI : tableaux en terminal, couleurs désactivables, TOML conservé en redirection, diagnostics mémoire/PID/threads du serveur et avertissements sur les compteurs cumulés. Vérification en pseudo-terminal (NO_COLOR, --no-color, TERM=dumb, TOML sans ANSI) et 163 tests réussis, 11 ignorés ; fmt, Clippy, check et build release verrouillés validés. Voir [utilisation](docs/utilisation.md#affichage-et-diagnostic).
+
+- [x] Corriger les captures inutilisées du moteur multi-motifs : repli PikeVM testé explicitement, mémoire bornée, priorités/réécritures/CNAME et libération de cinq générations sous lecteurs concurrents. Validation AMD64 : 156 tests réussis, 11 ignorés ; fmt, Clippy sans avertissement, check et build release avec lockfile.
+- [x] Mesurer le correctif mémoire sur corpus synthétique AMD64 : cinq paires alternées, cache regex ramené de 2,55 Gio à 3,30 Mio ; 11 millions de requêtes DNS comparatives sans erreur, puis 5 millions sur quatre cœurs/workers fixes. Benchmarks complets EDNS/forwarding incomplets (échecs reproduits sur les deux versions) : aucune validation globale ni ARM64 déduite.
+- [ ] Confirmer le correctif mémoire sur les listes exactes de l’incident et sur Alpine ARM64/Raspberry Pi 5 avec le mainteneur : voir [protocole et mesures](docs/filter-memory.md).
+
 - [x] Réexécuter les tests AMD64 avec fixtures UDP/TCP, IPv4/IPv6 et Unix dans un environnement autorisé : 139 tests Rust réussis le 2026-11-12 (9 tests explicitement ignorés : benchmarks et Docker).
 - [x] Retirer Python du dépôt et de la chaîne de release ; 8 tests de packaging migrés en Rust, sans exécuter de binaire ARM ni modifier le système hôte.
 - [x] Valider le workflow GitHub et les scripts d'archive/installation OpenRC : fmt, Clippy sans avertissement, tests et check avec lockfile, build release AMD64, ShellCheck 0.11.0 et actionlint 1.7.12 réussis le 2026-11-12.

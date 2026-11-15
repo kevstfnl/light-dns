@@ -7,7 +7,7 @@ use hickory_proto::{
     op::{Message, ResponseCode},
     rr::{Name, RData, RecordType},
 };
-use regex_automata::{Input, MatchKind, PatternSet, meta::Regex};
+use regex_automata::{Input, MatchKind, PatternSet, meta::Regex, nfa::thompson::WhichCaptures};
 use std::{
     collections::{HashMap, HashSet},
     io,
@@ -41,6 +41,24 @@ pub(crate) enum Decision {
 
 impl FilterIndex {
     pub(super) fn compile(texts: &[FilterList], allowlist: &[Name]) -> io::Result<Self> {
+        Self::compile_with_config(texts, allowlist, Self::mask_config())
+    }
+
+    fn mask_config() -> regex_automata::meta::Config {
+        // Seuls les identifiants de motifs sont utilisés, jamais leurs positions.
+        // Sinon le repli PikeVM alloue, par cache, deux tables états × captures
+        // implicites de tous les motifs : une taille potentiellement quadratique.
+        Regex::config()
+            .match_kind(MatchKind::All)
+            .which_captures(WhichCaptures::None)
+            .nfa_size_limit(Some(10 * 1024 * 1024))
+    }
+
+    fn compile_with_config(
+        texts: &[FilterList],
+        allowlist: &[Name],
+        mask_config: regex_automata::meta::Config,
+    ) -> io::Result<Self> {
         let mut rules = HashMap::new();
         let mut simple = HashSet::new();
         let mut disabled_simple = HashSet::new();
@@ -139,11 +157,7 @@ impl FilterIndex {
             index.masks = Some(
                 Regex::builder()
                     .syntax(regex_automata::util::syntax::Config::new().utf8(false))
-                    .configure(
-                        Regex::config()
-                            .match_kind(MatchKind::All)
-                            .nfa_size_limit(Some(10 * 1024 * 1024)),
-                    )
+                    .configure(mask_config)
                     .build_many(&expressions)
                     .map_err(io::Error::other)?,
             );
@@ -328,6 +342,11 @@ impl FilterIndex {
     pub(crate) fn len(&self) -> usize {
         self.count
     }
+
+    #[cfg(all(test, target_os = "linux"))]
+    pub(super) fn mask_regex(&self) -> Option<&Regex> {
+        self.masks.as_ref()
+    }
 }
 
 fn decision(action: Option<Action>) -> Decision {
@@ -341,3 +360,7 @@ fn decision(action: Option<Action>) -> Decision {
 #[cfg(all(test, target_os = "linux"))]
 #[path = "../../tests/performance/filter_offline.rs"]
 mod offline;
+
+#[cfg(test)]
+#[path = "../../tests/filtering/index_memory.rs"]
+mod memory_tests;

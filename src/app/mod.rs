@@ -3,6 +3,7 @@ mod cli;
 mod control;
 #[cfg(unix)]
 mod management;
+mod output;
 mod shutdown;
 
 use crate::{config::Config, dns::server};
@@ -13,12 +14,13 @@ use std::{io, time::Duration};
 /// Charge la configuration et exécute le service jusqu'à son arrêt.
 pub async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let args = Arguments::parse(std::env::args_os().skip(1))?;
+    let output = output::Output::detect(args.no_color);
     if matches!(args.command, Command::Help) {
-        print!("{}", cli::HELP);
+        print!("{}", output.help(cli::HELP));
         return Ok(());
     }
     if matches!(args.command, Command::Version) {
-        println!("light-dns {}", env!("CARGO_PKG_VERSION"));
+        print!("{}", output.version());
         return Ok(());
     }
     #[cfg(unix)]
@@ -31,7 +33,11 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     if !matches!(args.command, Command::Serve) {
         #[cfg(unix)]
         {
-            print!("{}", control::request(args.socket, args.command).await?);
+            let body = control::request(args.socket.clone(), &args.command).await?;
+            print!(
+                "{}",
+                output.render(&args.command, args.format, &body, &args.socket)?
+            );
             return Ok(());
         }
         #[cfg(not(unix))]

@@ -1,17 +1,53 @@
 use std::{ffi::OsString, io, path::PathBuf};
 
-pub(super) const HELP: &str = "light-dns [--config CHEMIN] [--socket CHEMIN] [COMMANDE]
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+pub(super) enum Format {
+    #[default]
+    Auto,
+    Table,
+    Toml,
+}
 
-Gestion Alpine (root pour modifier le système) :\n  install\n  update [--check | --version VERSION]\n  uninstall [--purge]\n  version\n\nSans commande : démarrer le serveur DNS.
-  serve        Démarrer le serveur DNS
-  cache status Afficher l’état du cache DNS\n  cache clear  Vider le cache DNS du serveur actif
-  reload       Recharger son fichier TOML, sans changer ses écoutes
-  stats        Afficher les statistiques du serveur actif
-  health       Vérifier UDP/TCP local (--upstream pour tester aussi les upstreams)\n  --help       Afficher cette aide
+pub(super) const HELP: &str = "light-dns  —  Serveur DNS local
 
-Défaut serveur : --config config.toml ; --socket light-dns.sock.
-Administration : --socket explicite, sinon socket locale si présente,
-sinon /run/light-dns/control.sock si présente.
+Usage : light-dns [OPTIONS] [COMMANDE]
+
+Serveur :
+  serve                 Démarrer le serveur (commande par défaut)
+  health                Vérifier le DNS local en UDP et TCP
+  health --upstream     Vérifier aussi une résolution via les upstreams
+
+Administration :
+  stats                 Trafic, erreurs, filtrage et mémoire du serveur
+  cache status          Occupation, limites et compteurs du cache DNS
+  cache clear           Vider le cache DNS actif
+  reload                Relire le TOML et remplacer le cache DNS
+
+Gestion Alpine :
+  install               Installer le service (root)
+  update --check        Vérifier les versions installée et disponible
+  update                Mettre à jour le service (root)
+  update --version VER  Installer une version précise (root)
+  uninstall [--purge]   Désinstaller le service (root)
+  version               Afficher la version du binaire
+
+Options :
+  --config CHEMIN       Fichier serveur (défaut : config.toml)
+  --socket CHEMIN       Socket de contrôle explicite
+  --format FORMAT       stats/cache status : auto, table ou toml
+  --no-color            Désactiver les couleurs (ou définir NO_COLOR)
+  -h, --help            Afficher cette aide
+
+Exemples :
+  light-dns stats
+  light-dns stats --format toml > stats.toml
+  light-dns cache status --format table
+  light-dns --socket /run/light-dns/control.sock health --upstream
+
+En terminal : tableaux ; sortie redirigée : TOML pour stats/cache status.
+Les compteurs sont cumulés depuis le démarrage, pas un état de santé actuel.
+Administration : socket locale si présente, sinon /run/light-dns/control.sock.
+Une socket choisie indisponible ne provoque aucun changement d’instance.
 Les commandes d’administration ne chargent pas le TOML.
 ";
 
@@ -36,23 +72,44 @@ pub(super) struct Arguments {
     pub config: PathBuf,
     pub socket: PathBuf,
     pub command: Command,
+    pub format: Format,
+    pub no_color: bool,
 }
 
 impl Arguments {
     pub fn parse(args: impl Iterator<Item = OsString>) -> io::Result<Self> {
         let mut config = PathBuf::from("config.toml");
         let mut socket = None;
+        let mut format = Format::Auto;
+        let args: Vec<_> = args.collect();
+        let mut no_color = args.iter().any(|arg| arg == "--no-color");
         let mut words = Vec::new();
-        let mut args = args.peekable();
+        let mut args = args.into_iter().peekable();
         while let Some(arg) = args.next() {
             if arg == "--help" || arg == "-h" {
                 return Ok(Self {
                     config,
                     socket: socket.unwrap_or_else(|| PathBuf::from("light-dns.sock")),
                     command: Command::Help,
+                    format,
+                    no_color,
                 });
             }
-            if arg == "--config" || arg == "--socket" {
+            if arg == "--no-color" {
+                no_color = true;
+            } else if arg == "--format" {
+                format = match args.next().as_deref().and_then(|value| value.to_str()) {
+                    Some("auto") => Format::Auto,
+                    Some("table") => Format::Table,
+                    Some("toml") => Format::Toml,
+                    _ => {
+                        return Err(io::Error::new(
+                            io::ErrorKind::InvalidInput,
+                            "--format attend auto, table ou toml",
+                        ));
+                    }
+                };
+            } else if arg == "--config" || arg == "--socket" {
                 let value = args
                     .next()
                     .filter(|value| !value.is_empty())
@@ -110,6 +167,12 @@ impl Arguments {
                 ));
             }
         };
+        if format != Format::Auto && !matches!(command, Command::Stats | Command::CacheStatus) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "--format est réservé à stats et cache status",
+            ));
+        }
         let socket = match socket {
             Some(path) => path,
             None if matches!(
@@ -132,6 +195,8 @@ impl Arguments {
             config,
             socket,
             command,
+            format,
+            no_color,
         })
     }
 }
@@ -182,6 +247,29 @@ mod tests {
         fn drop(&mut self) {
             let _ = fs::remove_dir_all(&self.0);
         }
+    }
+
+    #[test]
+    fn output_options_are_validated_without_loading_configuration() -> io::Result<()> {
+        for words in [
+            vec!["stats", "--format", "table", "--no-color"],
+            vec!["--format", "toml", "cache", "status"],
+        ] {
+            let args = Arguments::parse(words.into_iter().map(OsString::from))?;
+            assert!(args.format != Format::Auto);
+        }
+        for words in [
+            vec!["stats", "--format"],
+            vec!["stats", "--format", "json"],
+            vec!["reload", "--format", "table"],
+            vec!["serve", "--format", "toml"],
+        ] {
+            assert!(Arguments::parse(words.into_iter().map(OsString::from)).is_err());
+        }
+        assert!(
+            Arguments::parse(["--help", "--no-color"].into_iter().map(OsString::from))?.no_color
+        );
+        Ok(())
     }
 
     #[test]

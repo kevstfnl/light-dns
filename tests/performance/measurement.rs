@@ -113,8 +113,8 @@ pub(super) fn concurrencies() -> TestResult<Vec<usize>> {
         .split(',')
         .map(str::parse::<usize>)
         .collect::<Result<Vec<_>, _>>()?;
-    if values.is_empty() || values.iter().any(|value| ![1, 32, 256].contains(value)) {
-        return Err(io::Error::other("concurrence attendue : sous-ensemble de 1,32,256").into());
+    if values.is_empty() || values.iter().any(|value| ![1, 4, 32, 256].contains(value)) {
+        return Err(io::Error::other("concurrence attendue : sous-ensemble de 1,4,32,256").into());
     }
     Ok(values)
 }

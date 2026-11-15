@@ -307,3 +307,51 @@ async fn health_distinguishes_local_dns_and_upstream_resolution() -> TestResult 
     assert!(daemon.command(&["health"]).await?.status.success());
     Ok(())
 }
+
+#[tokio::test]
+async fn cli_tables_and_process_diagnostics_preserve_machine_output() -> TestResult {
+    let upstream = Upstream::start(answer, answer).await?;
+    let daemon = Daemon::new(upstream.address).await?;
+    let stats = daemon.stats().await?;
+    assert_eq!(
+        stats["process"]["pid"].as_integer(),
+        Some(i64::from(daemon.child.id()))
+    );
+    assert_eq!(
+        stats["process"]["version"].as_str(),
+        Some(env!("CARGO_PKG_VERSION"))
+    );
+    #[cfg(target_os = "linux")]
+    {
+        assert!(
+            stats["process"]["rss_bytes"]
+                .as_integer()
+                .is_some_and(|n| n > 0)
+        );
+        assert!(
+            stats["process"]["threads"]
+                .as_integer()
+                .is_some_and(|n| n > 0)
+        );
+    }
+    for args in [
+        vec!["stats", "--format", "table", "--no-color"],
+        vec!["cache", "status", "--format", "table"],
+    ] {
+        let result = daemon.command(&args).await?;
+        assert!(
+            result.status.success(),
+            "{}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+        let text = String::from_utf8(result.stdout)?;
+        assert!(text.starts_with("light-dns /"));
+        assert!(!text.contains('\x1b'));
+        assert!(text.contains("cache"));
+    }
+    let result = daemon.command(&["stats", "--format", "toml"]).await?;
+    assert!(result.status.success());
+    let parsed: toml::Table = toml::from_str(&String::from_utf8(result.stdout)?)?;
+    assert_eq!(parsed["requests"].as_integer(), Some(0));
+    Ok(())
+}

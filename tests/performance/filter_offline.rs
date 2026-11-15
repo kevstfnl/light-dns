@@ -263,3 +263,51 @@ fn retained_ids(index: &FilterIndex, name: &Name, kind: RecordType, ids: Vec<usi
     ids.retain(|id| index.advanced[*id].applies(name, kind));
     ids
 }
+
+/// Explicit cache accounting in a separate process from the production-pool probe.
+#[test]
+#[ignore = "Linux release regex cache accounting, 1000 masks and 100000 queries"]
+fn regex_cache_growth() -> Result {
+    if cfg!(debug_assertions) {
+        return Err(std::io::Error::other("use --release").into());
+    }
+    let mut text = String::new();
+    for id in 0..1000 {
+        writeln!(text, "||ad{id}*.example^$dnstype=AAAA")?;
+    }
+    let index = FilterIndex::compile(
+        &[FilterList {
+            text,
+            allow: false,
+            allow_dnsrewrite: false,
+        }],
+        &[],
+    )?;
+    let regex = index.masks.as_ref().ok_or("missing masks")?;
+    let mut cache = regex.create_cache();
+    let mut hits = PatternSet::new(regex.pattern_len());
+    let mut csv =
+        "queries,regex_compiled_bytes,regex_cache_bytes,rss_kib,process_hwm_kib\n".to_owned();
+    for id in 0..=100_000 {
+        if id > 0 {
+            let text = if id % 2 == 0 {
+                format!("ad{}x.example", id % 1000)
+            } else {
+                format!("unique{id}.example")
+            };
+            hits.clear();
+            regex.which_overlapping_matches_with(&mut cache, &Input::new(&text), &mut hits);
+            assert_eq!(hits.is_empty(), id % 2 != 0);
+        }
+        if id % 1000 == 0 || id == 1 {
+            let (_, rss, hwm) = offline::usage()?;
+            writeln!(
+                csv,
+                "{id},{},{},{rss},{hwm}",
+                regex.memory_usage(),
+                cache.memory_usage()
+            )?;
+        }
+    }
+    offline::output("regex-cache-growth", &csv)
+}

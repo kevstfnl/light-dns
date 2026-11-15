@@ -311,7 +311,7 @@ impl System {
         loop {
             match tokio::time::timeout(
                 Duration::from_secs(2),
-                control::request(self.path(SOCKET), Command::Health(false)),
+                control::request(self.path(SOCKET), &Command::Health(false)),
             )
             .await
             {
