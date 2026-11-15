@@ -86,6 +86,16 @@ jobs:
             target/release-assets/*
           if-no-files-found: error
           retention-days: 14
+      - name: Explain publication trigger
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: |
+          {
+            printf '## Build validé, release non demandée\n\n'
+            printf 'Ce push sur main produit les artefacts mais ne publie aucune release.\n\n'
+            printf 'Version construite : %s.\n\n' "$RELEASE_TAG"
+            printf 'Pour publier : committer les versions synchronisées, puis pousser un nouveau tag correspondant à Cargo. Ne pas déplacer un tag publié.\n'
+            printf "Un lancement manuel peut reprendre un tag existant dont la release n'est pas encore publiée.\n"
+          } >> "$GITHUB_STEP_SUMMARY"
 
   publish:
     if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'

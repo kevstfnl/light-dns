@@ -13,7 +13,7 @@ Le bootstrap épinglé télécharge le binaire et `SHA256SUMS`, vérifie la somm
 Depuis un shell root :
 
 ```sh
-version=v0.2.0-beta.3
+version=v0.2.0-beta.4
 base="https://github.com/kevstfnl/light-dns/releases/download/$version"
 name="light-dns-$version-aarch64-unknown-linux-musl"
 mkdir -m 700 light-dns-download
@@ -59,7 +59,7 @@ Seule la capacité `CAP_NET_BIND_SERVICE` est accordée, lorsque le port configu
 light-dns version
 light-dns update --check
 light-dns update
-light-dns update --version v0.2.0-beta.3
+light-dns update --version v0.2.0-beta.4
 ```
 
 Les releases publiques stables et bêta compatibles sont comparées selon SemVer, sans rétrogradation automatique. `--version` permet de choisir explicitement une version antérieure. `--check` ne demande pas root et ne modifie rien. Les limites GitHub anonymes ou une panne réseau produisent une erreur explicite.

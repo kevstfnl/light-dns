@@ -15,7 +15,7 @@
 Depuis un shell **root** :
 
 ```sh
-(s=$(wget -T 60 -qO- https://github.com/kevstfnl/light-dns/releases/download/v0.2.0-beta.3/bootstrap.sh) && sh -c "$s")
+(s=$(wget -T 60 -qO- https://github.com/kevstfnl/light-dns/releases/download/v0.2.0-beta.4/bootstrap.sh) && sh -c "$s")
 ```
 
 Installe le binaire et démarre le service sur `127.0.0.1:53`, sans compilateur ni Docker. Configuration : `/etc/light-dns/config.toml`.

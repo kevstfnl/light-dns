@@ -1,5 +1,8 @@
 # Validations restantes
 
+- [x] Diagnostiquer l’absence de release après `ca36ce0` : CI GitHub 43658186492 réussie (`check`/`build`), publication ignorée car push sur `main` sans nouveau tag. Préparer v0.2.0-beta.4 (Cargo/lockfile/bootstrap/exemples/notes synchronisés) et expliciter le déclencheur dans le résumé du build. Validation locale : 163 tests réussis, 11 ignorés ; fmt, Clippy, check, build release, ShellCheck et actionlint réussis.
+- [ ] Après autorisation explicite du mainteneur, committer et pousser v0.2.0-beta.4 et son nouveau tag, suivre la publication puis vérifier les téléchargements publics. Aucun tag existant déplacé et aucune release publiée modifiée.
+
 - [x] Améliorer la CLI : tableaux en terminal, couleurs désactivables, TOML conservé en redirection, diagnostics mémoire/PID/threads du serveur et avertissements sur les compteurs cumulés. Vérification en pseudo-terminal (NO_COLOR, --no-color, TERM=dumb, TOML sans ANSI) et 163 tests réussis, 11 ignorés ; fmt, Clippy, check et build release verrouillés validés. Voir [utilisation](docs/utilisation.md#affichage-et-diagnostic).
 
 - [x] Corriger les captures inutilisées du moteur multi-motifs : repli PikeVM testé explicitement, mémoire bornée, priorités/réécritures/CNAME et libération de cinq générations sous lecteurs concurrents. Validation AMD64 : 156 tests réussis, 11 ignorés ; fmt, Clippy sans avertissement, check et build release avec lockfile.
